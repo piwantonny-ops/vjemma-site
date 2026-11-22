@@ -29,6 +29,7 @@ import {
   resolveMediaUrl,
   saveState,
 } from './storage';
+import { clearOldCachesAndCheckUpdates } from './cacheSync';
 import {
   fetchSupabasePublicState,
   subscribeToSupabasePublicChanges,
@@ -70,9 +71,9 @@ export default function App() {
     openMediaDB();
   }, []);
 
-  const refreshFromSupabase = useCallback(async () => {
-    const patch = await fetchSupabasePublicState(latestStateRef.current);
-    if (!patch) return;
+  const refreshFromSupabase = useCallback(async (forceRemote = false) => {
+    const patch = await fetchSupabasePublicState(latestStateRef.current, { forceRemote });
+    if (!patch) return false;
     setState((prev) => {
       const next: AppState = {
         ...prev,
@@ -89,26 +90,47 @@ export default function App() {
       saveState(next);
       return next;
     });
+    return true;
   }, []);
 
   useEffect(() => {
-    refreshFromSupabase();
-    const unsubRealtime = subscribeToSupabasePublicChanges(() => {
-      refreshFromSupabase();
+    clearOldCachesAndCheckUpdates().finally(() => {
+      refreshFromSupabase(true);
     });
+
+    const unsubRealtime = subscribeToSupabasePublicChanges(() => {
+      refreshFromSupabase(false);
+    });
+
     const onVisibility = () => {
       if (document.visibilityState === 'visible') {
-        refreshFromSupabase();
+        clearOldCachesAndCheckUpdates();
+        refreshFromSupabase(false);
       }
     };
+    const onFocusOrShow = () => {
+      clearOldCachesAndCheckUpdates();
+      refreshFromSupabase(false);
+    };
+    const onOnline = () => {
+      refreshFromSupabase(true);
+    };
+
     document.addEventListener('visibilitychange', onVisibility);
+    window.addEventListener('focus', onFocusOrShow);
+    window.addEventListener('pageshow', onFocusOrShow);
+    window.addEventListener('online', onOnline);
+
     const pollId = window.setInterval(() => {
-      refreshFromSupabase();
+      refreshFromSupabase(false);
     }, 20000);
 
     return () => {
       unsubRealtime();
       document.removeEventListener('visibilitychange', onVisibility);
+      window.removeEventListener('focus', onFocusOrShow);
+      window.removeEventListener('pageshow', onFocusOrShow);
+      window.removeEventListener('online', onOnline);
       window.clearInterval(pollId);
     };
   }, [refreshFromSupabase]);
@@ -158,6 +180,12 @@ export default function App() {
   const showToast = useCallback((msg: string) => {
     setToastMessage(msg);
   }, []);
+
+  const handleManualRefresh = useCallback(async () => {
+    await clearOldCachesAndCheckUpdates();
+    const updated = await refreshFromSupabase(true);
+    showToast(updated ? 'Updated with latest movies & series!' : 'Catalog is up to date.');
+  }, [refreshFromSupabase, showToast]);
 
   useEffect(() => {
     if (!toastMessage) return;
@@ -1106,6 +1134,7 @@ export default function App() {
                 onNotify={showToast}
                 onAdminEditMovie={handleAdminEditMovie}
                 onAdminDeleteMovie={handleAdminDeleteMovie}
+                onRefresh={handleManualRefresh}
               />
             )}
 

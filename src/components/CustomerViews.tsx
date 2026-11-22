@@ -1,5 +1,5 @@
-import React, { useEffect, useState } from 'react';
-import { ChevronLeft, ChevronRight, Download, Film, Heart, Info, Lock, MessageCircle, Play, Radio, Share2 } from 'lucide-react';
+import React, { useEffect, useRef, useState } from 'react';
+import { ChevronLeft, ChevronRight, Download, Film, Heart, Info, Lock, MessageCircle, Play, Radio, RefreshCw, Share2 } from 'lucide-react';
 import { getSocialPlatformItems, isVipLabel, normalizeSocialUrl, parseGenreLine, parseMovieGenres, useResolvedMedia } from '../storage';
 import { PWAInstallButton } from './PWAInstallButton';
 import type {
@@ -646,6 +646,7 @@ interface HomeViewProps {
   onNotify?: (msg: string) => void;
   onAdminEditMovie?: (id: string) => void;
   onAdminDeleteMovie?: (id: string) => void;
+  onRefresh?: () => Promise<void>;
 }
 
 export const HomeView: React.FC<HomeViewProps> = ({
@@ -661,7 +662,66 @@ export const HomeView: React.FC<HomeViewProps> = ({
   onNotify,
   onAdminEditMovie,
   onAdminDeleteMovie,
+  onRefresh,
 }) => {
+  const [pullDistance, setPullDistance] = useState(0);
+  const [isRefreshing, setIsRefreshing] = useState(false);
+  const touchStartYRef = useRef<number | null>(null);
+  const touchStartXRef = useRef<number | null>(null);
+  const isPullingRef = useRef(false);
+
+  const PULL_THRESHOLD = 64;
+
+  const handleTouchStart = (e: React.TouchEvent<HTMLDivElement>) => {
+    if (!onRefresh || isRefreshing) return;
+    if (window.scrollY > 2) return;
+    const touch = e.touches[0];
+    if (!touch) return;
+    touchStartYRef.current = touch.clientY;
+    touchStartXRef.current = touch.clientX;
+    isPullingRef.current = true;
+  };
+
+  const handleTouchMove = (e: React.TouchEvent<HTMLDivElement>) => {
+    if (!isPullingRef.current || touchStartYRef.current === null || touchStartXRef.current === null) {
+      return;
+    }
+    if (window.scrollY > 2) {
+      isPullingRef.current = false;
+      setPullDistance(0);
+      return;
+    }
+    const touch = e.touches[0];
+    if (!touch) return;
+    const deltaY = touch.clientY - touchStartYRef.current;
+    const deltaX = Math.abs(touch.clientX - touchStartXRef.current);
+    if (deltaY <= 0 || deltaX > deltaY) {
+      if (pullDistance !== 0) setPullDistance(0);
+      return;
+    }
+    setPullDistance(Math.min(104, Math.round(deltaY * 0.55)));
+  };
+
+  const handleTouchEnd = async () => {
+    if (!isPullingRef.current) return;
+    isPullingRef.current = false;
+    touchStartYRef.current = null;
+    touchStartXRef.current = null;
+
+    if (pullDistance >= PULL_THRESHOLD && onRefresh && !isRefreshing) {
+      setIsRefreshing(true);
+      setPullDistance(52);
+      try {
+        await onRefresh();
+      } finally {
+        setIsRefreshing(false);
+        setPullDistance(0);
+      }
+    } else {
+      setPullDistance(0);
+    }
+  };
+
   const trendingMovies = [...state.movies].reverse();
   const christianMovies = state.movies
     .filter(
@@ -674,7 +734,28 @@ export const HomeView: React.FC<HomeViewProps> = ({
     .reverse();
 
   return (
-    <div>
+    <div
+      onTouchStart={handleTouchStart}
+      onTouchMove={handleTouchMove}
+      onTouchEnd={handleTouchEnd}
+      onTouchCancel={handleTouchEnd}
+    >
+      {(pullDistance > 8 || isRefreshing) && (
+        <div
+          style={{ height: `${Math.max(42, pullDistance)}px` }}
+          className="flex items-center justify-center gap-2 overflow-hidden border-b border-[#d4af37]/30 bg-[#140a24] text-xs font-bold text-[#f0cf65] transition-all duration-150"
+        >
+          <RefreshCw className={`h-4 w-4 ${isRefreshing ? 'animate-spin' : ''}`} />
+          <span>
+            {isRefreshing
+              ? 'Refreshing latest movies & series...'
+              : pullDistance >= PULL_THRESHOLD
+                ? 'Release to refresh'
+                : 'Pull down to refresh'}
+          </span>
+        </div>
+      )}
+
       <BannerCarousel banners={state.banners} onBannerAction={onBannerAction} />
 
       <div className="border-b border-[#d4af37]/40 bg-gradient-to-r from-[#4a077a] via-[#6a0dad] to-[#4a077a] px-4 py-4 text-center">

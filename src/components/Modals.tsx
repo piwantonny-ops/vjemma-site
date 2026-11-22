@@ -407,23 +407,94 @@ export const PesapalModal: React.FC<PesapalModalProps> = ({
 
     try {
       const callbackUrl = `${window.location.origin}/payment-success`;
-      const response = await fetch(PESAPAL_WORKER_URL, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          amount,
-          name: cleanName,
-          email: cleanEmail,
-          phone: cleanPhone,
-          planName: plan.planName,
-          days: Number(plan.days || 1),
-          callback_url: callbackUrl,
-        }),
-      });
+      const requestPayload = {
+        amount,
+        currency: 'UGX',
+        name: cleanName,
+        email: cleanEmail,
+        phone: cleanPhone,
+        paymentMethod: method,
+        planName: plan.planName,
+        days: Number(plan.days || 1),
+        callback_url: callbackUrl,
+        mode: 'live',
+      };
 
-      const data = await response.json().catch(() => ({}));
-      const redirectUrl = data?.redirect_url || data?.redirectUrl || data?.url;
-      const returnedOrderId = data?.orderId || data?.order_tracking_id || data?.orderTrackingId;
+      let redirectUrl = '';
+      let returnedOrderId = '';
+      let workerDiagnostic = '';
+
+      try {
+        const workerRes = await fetch(PESAPAL_WORKER_URL, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(requestPayload),
+        });
+        const workerRaw = await workerRes.text();
+        let workerData: Record<string, unknown> = {};
+        try {
+          workerData = JSON.parse(workerRaw) as Record<string, unknown>;
+        } catch {
+          workerData = {};
+        }
+
+        const candidateUrl =
+          (typeof workerData.redirect_url === 'string' && workerData.redirect_url) ||
+          (typeof workerData.redirectUrl === 'string' && workerData.redirectUrl) ||
+          (typeof workerData.url === 'string' && workerData.url) ||
+          '';
+
+        if (workerRes.ok && candidateUrl) {
+          redirectUrl = candidateUrl;
+          returnedOrderId = String(
+            workerData.orderId || workerData.order_tracking_id || workerData.orderTrackingId || ''
+          );
+        } else if (
+          typeof workerData.error === 'string' &&
+          workerData.error.trim()
+        ) {
+          workerDiagnostic = workerData.error.trim();
+        } else if (
+          typeof workerData.message === 'string' &&
+          workerData.message.trim()
+        ) {
+          workerDiagnostic = workerData.message.trim();
+        } else if (workerRaw.includes('Worker is Live')) {
+          workerDiagnostic =
+            'Pesapal Worker returned a placeholder response without LIVE Pesapal checkout or CORS headers.';
+        }
+      } catch {
+        workerDiagnostic = 'Pesapal Worker connection blocked (CORS or network error).';
+      }
+
+      // Fallback to same-origin LIVE Pesapal v3 proxy (/api/pesapal/pay)
+      if (!redirectUrl) {
+        try {
+          const apiRes = await fetch('/api/pesapal/pay', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(requestPayload),
+          });
+          const apiType = apiRes.headers.get('content-type') || '';
+          if (apiType.includes('application/json')) {
+            const apiData = (await apiRes.json().catch(() => ({}))) as Record<string, unknown>;
+            const candidateApiUrl =
+              (typeof apiData.redirect_url === 'string' && apiData.redirect_url) ||
+              (typeof apiData.redirectUrl === 'string' && apiData.redirectUrl) ||
+              '';
+            if (apiRes.ok && candidateApiUrl) {
+              redirectUrl = candidateApiUrl;
+              returnedOrderId = String(
+                apiData.orderId || apiData.order_tracking_id || apiData.orderTrackingId || ''
+              );
+            } else if (typeof apiData.error === 'string' && apiData.error.trim()) {
+              workerDiagnostic = apiData.error.trim();
+            }
+          }
+        } catch {
+          // Ignore backend fallback unavailability on pure static hosting
+        }
+      }
 
       if (returnedOrderId) {
         try {
@@ -436,11 +507,10 @@ export const PesapalModal: React.FC<PesapalModalProps> = ({
         }
       }
 
-      if (!response.ok || !redirectUrl) {
+      if (!redirectUrl) {
         const msg =
-          data?.error ||
-          data?.message ||
-          'Could not initiate Pesapal checkout. Try again or pay manually with WhatsApp.';
+          workerDiagnostic ||
+          'Could not initiate LIVE Pesapal checkout. Try again or use Manual WhatsApp below.';
         setErrorMsg(msg);
         onNotify(msg);
         setIsSubmitting(false);
@@ -661,31 +731,80 @@ export const PaymentSuccessPage: React.FC<PaymentSuccessPageProps> = ({
       return;
     }
 
-    fetch(`${PESAPAL_WORKER_URL}?orderId=${encodeURIComponent(urlOrderId)}`)
-      .then(async (res) => {
-        const data: WorkerStatusResponse = await res.json().catch(() => ({}));
-        if (!res.ok) {
-          throw new Error(data?.error || data?.message || 'Verification failed.');
-        }
-        const statusStr = String(
-          data.status || data.payment_status_description || data.payment_status || ''
-        )
-          .trim()
-          .toUpperCase();
+    const verifyPesapalOrder = async () => {
+      let data: WorkerStatusResponse = {};
+      let resolved = false;
+      let diagnostic = '';
 
-        if (statusStr === 'COMPLETED') {
-          const confirmed = onPaymentCompleted(urlOrderId, data, savedOrder);
-          setConfirmation(confirmed);
-          setPhase('completed');
-        } else {
-          setErrorDetail(data?.message || (statusStr ? `Payment status: ${statusStr}` : ''));
-          setPhase('failed');
+      try {
+        const workerRes = await fetch(
+          `${PESAPAL_WORKER_URL}?orderId=${encodeURIComponent(urlOrderId)}`,
+          { cache: 'no-store' }
+        );
+        const workerText = await workerRes.text();
+        let parsed: WorkerStatusResponse = {};
+        try {
+          parsed = JSON.parse(workerText) as WorkerStatusResponse;
+        } catch {
+          parsed = {};
         }
-      })
-      .catch((err) => {
-        setErrorDetail(err instanceof Error ? err.message : 'Unable to verify payment.');
+        const statusCandidate = String(
+          parsed.status || parsed.payment_status_description || parsed.payment_status || ''
+        ).trim();
+        if (workerRes.ok && statusCandidate) {
+          data = parsed;
+          resolved = true;
+        } else if (parsed.error || parsed.message) {
+          diagnostic = parsed.error || parsed.message || '';
+        }
+      } catch {
+        // Fallback to backend route below
+      }
+
+      if (!resolved) {
+        try {
+          const apiRes = await fetch(
+            `/api/pesapal/status?orderId=${encodeURIComponent(urlOrderId)}`,
+            { cache: 'no-store' }
+          );
+          const apiType = apiRes.headers.get('content-type') || '';
+          if (apiType.includes('application/json')) {
+            const parsed = (await apiRes.json().catch(() => ({}))) as WorkerStatusResponse;
+            if (apiRes.ok) {
+              data = parsed;
+              resolved = true;
+            } else if (parsed.error || parsed.message) {
+              diagnostic = parsed.error || parsed.message || '';
+            }
+          }
+        } catch {
+          // Ignore backend unavailability
+        }
+      }
+
+      if (!resolved) {
+        setErrorDetail(diagnostic || 'Unable to verify payment status.');
         setPhase('failed');
-      });
+        return;
+      }
+
+      const statusStr = String(
+        data.status || data.payment_status_description || data.payment_status || ''
+      )
+        .trim()
+        .toUpperCase();
+
+      if (statusStr === 'COMPLETED') {
+        const confirmed = onPaymentCompleted(urlOrderId, data, savedOrder);
+        setConfirmation(confirmed);
+        setPhase('completed');
+      } else {
+        setErrorDetail(data?.message || (statusStr ? `Payment status: ${statusStr}` : ''));
+        setPhase('failed');
+      }
+    };
+
+    verifyPesapalOrder();
   }, [onPaymentCompleted]);
 
   const whatsappSupportHref = `https://wa.me/${WHATSAPP_ADMIN_PHONE}?text=${encodeURIComponent(
