@@ -1,0 +1,6 @@
+{
+  "name": "VJ EMMA - TRUE LIGHT PRODUCTION",
+  "description": "Luo-translated movies, Christian films, and series streaming platform by VJ EMMA - TRUE LIGHT PRODUCTION.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
