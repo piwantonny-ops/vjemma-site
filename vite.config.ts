@@ -20,10 +20,10 @@ export default defineConfig(() => {
         ],
         manifest: {
           id: '/',
-          name: 'VJ EMMA - TRUE LIGHT PRODUCTION',
+          name: 'VJ Emma - True Light Production | The Pride of Luo',
           short_name: 'VJ EMMA',
           description:
-            'WE BRING THE WORLD HOME IN LUO - Watch Movies In Your Language. Streaming movies, Christian films, series, and Live TV.',
+            'Watch Indian, Asian, Christian, Comedy, Horror & Action movies dubbed in Luo. VJ Emma True Light Production - The Pride of Luo. For Acholi, Lango, Alur & all Luo - Stream movies, series & VIP shows, all dubbed in Luo.',
           theme_color: '#6a0dad',
           background_color: '#050507',
           display: 'standalone',
@@ -52,6 +52,9 @@ export default defineConfig(() => {
           ],
         },
         workbox: {
+          skipWaiting: true,
+          clientsClaim: true,
+          cleanupOutdatedCaches: true,
           globPatterns: ['**/*.{js,css,html,ico,png,svg,jpg,woff,woff2}'],
           maximumFileSizeToCacheInBytes: 6 * 1024 * 1024,
           runtimeCaching: [

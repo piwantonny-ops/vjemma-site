@@ -1,6 +1,14 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { Film } from 'lucide-react';
-import { normalizeSocialUrl, resolveMediaUrl, saveBlobToIDB, useResolvedMedia } from '../storage';
+import {
+  DEFAULT_GENRE_LINE,
+  LOCKED_ADMIN_EMAIL,
+  normalizeSocialUrl,
+  parseGenreLine,
+  resolveMediaUrl,
+  saveBlobToIDB,
+  useResolvedMedia,
+} from '../storage';
 import type { AdminTab, AppState, UserAccount } from '../types';
 
 interface AdminPanelProps {
@@ -54,10 +62,9 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
   const [movieTitle, setMovieTitle] = useState('');
   const [movieYear, setMovieYear] = useState('');
   const [movieRating, setMovieRating] = useState('');
-  const [movieCategory, setMovieCategory] = useState('');
   const [movieGenre, setMovieGenre] = useState('');
   const [movieActors, setMovieActors] = useState('');
-  const [movieLabel, setMovieLabel] = useState('TRENDING');
+  const [movieLabel, setMovieLabel] = useState('');
   const [movieDescription, setMovieDescription] = useState('');
   const [moviePosterLink, setMoviePosterLink] = useState('');
   const [movieVideoLink, setMovieVideoLink] = useState('');
@@ -81,12 +88,16 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
   const [editBannerId, setEditBannerId] = useState('');
   const [bannerLink, setBannerLink] = useState('');
   const [bannerPreview, setBannerPreview] = useState('');
+  const [bannerTitle, setBannerTitle] = useState('');
+  const [bannerSubText, setBannerSubText] = useState('');
+  const [bannerButtonText, setBannerButtonText] = useState('');
   const bannerFileRef = useRef<HTMLInputElement | null>(null);
 
   /* --- SERIES STATE --- */
   const [editSeasonId, setEditSeasonId] = useState('');
   const [seasonSeriesTitle, setSeasonSeriesTitle] = useState('');
   const [seasonNumber, setSeasonNumber] = useState('');
+  const [seasonLabel, setSeasonLabel] = useState('');
   const [seasonPosterLink, setSeasonPosterLink] = useState('');
   const [seasonPosterPreview, setSeasonPosterPreview] = useState('');
   const [seasonPosterRemoved, setSeasonPosterRemoved] = useState(false);
@@ -110,15 +121,6 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
   const [tvPosterRemoved, setTvPosterRemoved] = useState(false);
   const tvPosterFileRef = useRef<HTMLInputElement | null>(null);
 
-  /* --- CATEGORIES, GENRES & MOVIE TAGS STATE --- */
-  const [editCategoryId, setEditCategoryId] = useState('');
-  const [categoryName, setCategoryName] = useState('');
-  const [editGenreId, setEditGenreId] = useState('');
-  const [genreName, setGenreName] = useState('');
-  const [editMovieTagOld, setEditMovieTagOld] = useState('');
-  const [movieTagInput, setMovieTagInput] = useState('');
-  const [inlineMovieTagInput, setInlineMovieTagInput] = useState('');
-
   /* --- PAYMENT PLANS STATE (NAME, PRICE, DAYS) --- */
   const [editPlanId, setEditPlanId] = useState('');
   const [planNameInput, setPlanNameInput] = useState('');
@@ -127,6 +129,9 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
 
   /* --- SETTINGS STATE --- */
   const [setAppName, setSetAppName] = useState(state.settings.appName);
+  const [setGenreLine, setSetGenreLine] = useState(
+    state.settings.genreLine !== undefined ? state.settings.genreLine : DEFAULT_GENRE_LINE
+  );
   const [setR2Links, setSetR2Links] = useState<string[]>(() => {
     const arr = Array.isArray(state.settings.r2Links) ? state.settings.r2Links : [];
     return [0, 1, 2, 3, 4].map((i) => arr[i] ?? (i === 0 ? state.settings.r2Endpoint || '' : ''));
@@ -151,8 +156,6 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
   const [setShowPosterActors, setSetShowPosterActors] = useState(state.settings.showPosterActors !== false);
   const [setShowPosterDescription, setSetShowPosterDescription] = useState(state.settings.showPosterDescription !== false);
 
-  const [setAdminEmail, setSetAdminEmail] = useState(state.adminEmail || '');
-  const [cpCurrent, setCpCurrent] = useState('');
   const [cpNew, setCpNew] = useState('');
   const [cpConfirm, setCpConfirm] = useState('');
 
@@ -173,54 +176,14 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
     state.episodes.length +
     (state.liveTvChannels?.length || 0);
 
+  const nowTs = Date.now();
   const pendingClientsCount = state.users.filter((u) => u.status === 'pending').length;
-  const approvedClientsCount = state.users.filter((u) => u.subscribed && u.status !== 'blocked').length;
+  const approvedClientsCount = state.users.filter(
+    (u) => u.subscribed && u.status !== 'blocked' && u.expiry > nowTs
+  ).length;
   const blockedClientsCount = state.users.filter((u) => u.status === 'blocked').length;
 
-  const mergedCategories = Array.from(
-    new Set([
-      ...state.categories.map((c) => c.name),
-      'Christian Movies',
-      'Action',
-      'Drama',
-      'Luo Movies',
-    ])
-  );
-
-  const mergedGenres = Array.from(
-    new Set([
-      ...state.genres.map((g) => g.name),
-      'Faith',
-      'Action',
-      'Drama',
-      'Comedy',
-      'Thriller',
-    ])
-  );
-
-  const configuredMovieTags =
-    state.settings.movieTags && state.settings.movieTags.length > 0
-      ? state.settings.movieTags
-      : [
-          'TRENDING',
-          'NEW RELEASE',
-          'LUO DUBBED',
-          'HOT',
-          'TOP 10',
-          'UPCOMING',
-          'CLASSIC',
-          'CHRISTIAN',
-          'FEATURED',
-        ];
-
-  const selectedMovieTags = movieLabel
-    .split(',')
-    .map((t) => t.trim())
-    .filter(Boolean);
-
-  const availableMovieTags = Array.from(
-    new Set([...configuredMovieTags, ...selectedMovieTags])
-  );
+  const oneLineGenres = parseGenreLine(state.settings.genreLine);
 
   const configuredPaymentPlans =
     Array.isArray(state.settings.paymentPlans) && state.settings.paymentPlans.length > 0
@@ -230,43 +193,6 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
           { id: 'plan_monthly', name: 'Monthly', price: Number(state.settings.priceMonthly || 15000), days: 30 },
           { id: 'plan_vip', name: 'VIP', price: Number(state.settings.priceVip || 30000), days: 30 },
         ];
-
-  const toggleMovieTagOnPoster = (tag: string) => {
-    const clean = tag.trim().toUpperCase();
-    if (!clean) return;
-    const exists = selectedMovieTags.some((t) => t.toUpperCase() === clean);
-    const next = exists
-      ? selectedMovieTags.filter((t) => t.toUpperCase() !== clean)
-      : [...selectedMovieTags, clean];
-    setMovieLabel(next.join(', '));
-  };
-
-  const addCustomTagWhileEditingPoster = () => {
-    const clean = inlineMovieTagInput.trim().toUpperCase();
-    if (!clean) {
-      onNotify('Enter a tag name first.');
-      return;
-    }
-    if (!selectedMovieTags.some((t) => t.toUpperCase() === clean)) {
-      setMovieLabel([...selectedMovieTags, clean].join(', '));
-    }
-    updateState((prev) => {
-      const current =
-        prev.settings.movieTags && prev.settings.movieTags.length > 0
-          ? prev.settings.movieTags
-          : configuredMovieTags;
-      if (current.some((t) => t.toUpperCase() === clean)) return prev;
-      return {
-        ...prev,
-        settings: {
-          ...prev.settings,
-          movieTags: [...current, clean],
-        },
-      };
-    });
-    setInlineMovieTagInput('');
-    onNotify(`Tag "${clean}" added to poster!`);
-  };
 
   /* --- MOVIES HANDLERS --- */
   const refreshUploadFileLabel = (pOverride?: File | null, vOverride?: File | null) => {
@@ -369,10 +295,9 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
     setMovieTitle('');
     setMovieYear('');
     setMovieRating('');
-    setMovieCategory('');
     setMovieGenre('');
     setMovieActors('');
-    setMovieLabel('TRENDING');
+    setMovieLabel('');
     setMovieDescription('');
     setMoviePosterLink('');
     setMovieVideoLink('');
@@ -416,6 +341,9 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
       nextVideoRef = await saveBlobToIDB(`video_${Date.now()}_${vFile.name}`, vFile);
     }
 
+    const cleanGenre = movieGenre.trim();
+    const cleanLabel = editMovieId ? movieLabel.trim() : '';
+
     updateState((prev) => {
       if (editMovieId) {
         return {
@@ -427,10 +355,10 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
                   title,
                   year: movieYear.trim(),
                   rating: movieRating.trim(),
-                  category: movieCategory,
-                  genre: movieGenre,
+                  category: cleanGenre,
+                  genre: cleanGenre,
                   actors: movieActors.trim(),
-                  label: movieLabel,
+                  label: cleanLabel,
                   description: movieDescription.trim(),
                   poster: posterRemoved ? '' : nextPosterRef || m.poster,
                   video: nextVideoRef || m.video,
@@ -448,10 +376,10 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
             title,
             year: movieYear.trim(),
             rating: movieRating.trim(),
-            category: movieCategory,
-            genre: movieGenre,
+            category: cleanGenre,
+            genre: cleanGenre,
             actors: movieActors.trim(),
-            label: movieLabel,
+            label: '',
             description: movieDescription.trim(),
             poster: posterRemoved ? '' : nextPosterRef,
             video: nextVideoRef,
@@ -473,10 +401,9 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
     setMovieTitle(m.title);
     setMovieYear(m.year || '');
     setMovieRating(m.rating || '');
-    setMovieCategory(m.category || '');
-    setMovieGenre(m.genre || '');
+    setMovieGenre(m.genre || m.category || '');
     setMovieActors(m.actors || '');
-    setMovieLabel(m.label || 'TRENDING');
+    setMovieLabel(m.label || '');
     setMovieDescription(m.description || '');
     setMoviePosterLink(m.poster && !m.poster.startsWith('idb://') ? m.poster : '');
     setMovieVideoLink(m.video && !m.video.startsWith('idb://') ? m.video : '');
@@ -533,6 +460,9 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
     setEditBannerId('');
     setBannerLink('');
     setBannerPreview('');
+    setBannerTitle('');
+    setBannerSubText('');
+    setBannerButtonText('');
     if (bannerFileRef.current) bannerFileRef.current.value = '';
   };
 
@@ -562,18 +492,39 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
       return;
     }
 
+    const title = bannerTitle.trim();
+    const subText = bannerSubText.trim();
+    const buttonText = bannerButtonText.trim();
+
     updateState((prev) => {
       if (editBannerId) {
         return {
           ...prev,
           banners: prev.banners.map((b) =>
-            b.id === editBannerId && imageRef ? { ...b, image: imageRef } : b
+            b.id === editBannerId
+              ? {
+                  ...b,
+                  image: imageRef || b.image,
+                  title,
+                  subText,
+                  buttonText,
+                }
+              : b
           ),
         };
       }
       return {
         ...prev,
-        banners: [...prev.banners, { id: 'ban_' + Date.now(), image: imageRef }],
+        banners: [
+          ...prev.banners,
+          {
+            id: 'ban_' + Date.now(),
+            image: imageRef,
+            title,
+            subText,
+            buttonText,
+          },
+        ],
       };
     });
 
@@ -586,6 +537,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
     setEditSeasonId('');
     setSeasonSeriesTitle('');
     setSeasonNumber('');
+    setSeasonLabel('');
     setSeasonPosterLink('');
     setSeasonPosterPreview('');
     setSeasonPosterRemoved(false);
@@ -618,6 +570,8 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
       posterRef = await saveBlobToIDB(`season_${Date.now()}_${file.name}`, file);
     }
 
+    const cleanSeasonLabel = editSeasonId ? seasonLabel.trim() : '';
+
     updateState((prev) => {
       if (editSeasonId) {
         return {
@@ -628,6 +582,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
                   ...s,
                   seriesTitle,
                   seasonNumber: sNum,
+                  label: cleanSeasonLabel,
                   poster: seasonPosterRemoved ? '' : posterRef || s.poster,
                 }
               : s
@@ -642,6 +597,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
             id: 'sea_' + Date.now(),
             seriesTitle,
             seasonNumber: sNum,
+            label: '',
             poster: seasonPosterRemoved ? '' : posterRef || '',
           },
         ],
@@ -813,107 +769,25 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
     onNotify('Live TV channel deleted.');
   };
 
-  /* --- CATEGORIES & GENRES HANDLERS --- */
-  const saveCategoryRecord = () => {
-    const trimmed = categoryName.trim();
-    if (!trimmed) {
-      onNotify('Enter category name.');
+  /* --- ONE-LINE GENRE / CATEGORY HANDLER --- */
+  const saveGenreLine = () => {
+    const parsed = parseGenreLine(setGenreLine);
+    if (parsed.length === 0) {
+      onNotify('Enter at least one genre separated by commas.');
       return;
     }
-    updateState((prev) => {
-      if (editCategoryId) {
-        return {
-          ...prev,
-          categories: prev.categories.map((c) =>
-            c.id === editCategoryId ? { ...c, name: trimmed } : c
-          ),
-        };
-      }
-      return {
-        ...prev,
-        categories: [...prev.categories, { id: 'cat_' + Date.now(), name: trimmed }],
-      };
-    });
-    setEditCategoryId('');
-    setCategoryName('');
-    onNotify('Category saved.');
-  };
-
-  const saveGenreRecord = () => {
-    const trimmed = genreName.trim();
-    if (!trimmed) {
-      onNotify('Enter genre name.');
-      return;
-    }
-    updateState((prev) => {
-      if (editGenreId) {
-        return {
-          ...prev,
-          genres: prev.genres.map((g) => (g.id === editGenreId ? { ...g, name: trimmed } : g)),
-        };
-      }
-      return {
-        ...prev,
-        genres: [...prev.genres, { id: 'gen_' + Date.now(), name: trimmed }],
-      };
-    });
-    setEditGenreId('');
-    setGenreName('');
-    onNotify('Genre saved.');
-  };
-
-  const saveMovieTagRecord = () => {
-    const trimmed = movieTagInput.trim().toUpperCase();
-    if (!trimmed) {
-      onNotify('Enter movie tag name.');
-      return;
-    }
-    updateState((prev) => {
-      const currentTags =
-        prev.settings.movieTags && prev.settings.movieTags.length > 0
-          ? prev.settings.movieTags
-          : configuredMovieTags;
-      let nextTags: string[];
-      if (editMovieTagOld) {
-        nextTags = currentTags.map((t) => (t === editMovieTagOld ? trimmed : t));
-      } else if (currentTags.some((t) => t.toUpperCase() === trimmed)) {
-        nextTags = currentTags;
-      } else {
-        nextTags = [...currentTags, trimmed];
-      }
-      return {
-        ...prev,
-        settings: {
-          ...prev.settings,
-          movieTags: nextTags,
-        },
-      };
-    });
-    setEditMovieTagOld('');
-    setMovieTagInput('');
-    onNotify('Movie tag saved!');
-  };
-
-  const deleteMovieTag = (tagToDelete: string) => {
-    updateState((prev) => {
-      const currentTags =
-        prev.settings.movieTags && prev.settings.movieTags.length > 0
-          ? prev.settings.movieTags
-          : configuredMovieTags;
-      const nextTags = currentTags.filter((t) => t !== tagToDelete);
-      return {
-        ...prev,
-        settings: {
-          ...prev.settings,
-          movieTags: nextTags.length > 0 ? nextTags : ['TRENDING'],
-        },
-      };
-    });
-    if (editMovieTagOld === tagToDelete) {
-      setEditMovieTagOld('');
-      setMovieTagInput('');
-    }
-    onNotify('Movie tag deleted.');
+    const cleanLine = parsed.join(', ');
+    setSetGenreLine(cleanLine);
+    updateState((prev) => ({
+      ...prev,
+      categories: parsed.map((name, idx) => ({ id: `cat_${idx}`, name })),
+      genres: parsed.map((name, idx) => ({ id: `gen_${idx}`, name })),
+      settings: {
+        ...prev.settings,
+        genreLine: cleanLine,
+      },
+    }));
+    onNotify('Genres updated & live instantly!');
   };
 
   /* --- PAYMENT PLANS CRUD (NAME, PRICE, DAYS) --- */
@@ -1069,11 +943,20 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
 
   const saveSettings = () => {
     const cleanLinks = setR2Links.map((x) => x.trim());
+    const parsedGenres = parseGenreLine(setGenreLine);
+    const cleanGenreLine =
+      parsedGenres.length > 0 ? parsedGenres.join(', ') : DEFAULT_GENRE_LINE;
+    const syncedGenres = parseGenreLine(cleanGenreLine);
+    setSetGenreLine(cleanGenreLine);
+
     updateState((prev) => ({
       ...prev,
+      categories: syncedGenres.map((name, idx) => ({ id: `cat_${idx}`, name })),
+      genres: syncedGenres.map((name, idx) => ({ id: `gen_${idx}`, name })),
       settings: {
         ...prev.settings,
         appName: setAppName.trim() || 'VJ EMMA - TRUE LIGHT PRODUCTION',
+        genreLine: cleanGenreLine,
         r2Endpoint: cleanLinks[0] || '',
         r2Links: cleanLinks,
         pesapalKey: setPesapalKey.trim(),
@@ -1096,38 +979,32 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
         showPosterDescription: setShowPosterDescription,
       },
     }));
-    onNotify('Settings saved successfully.');
+    onNotify('Settings saved & live instantly.');
   };
 
   const handleSaveAdminCredentials = () => {
-    const nextEmail = setAdminEmail.trim();
-    const wantsPasswordChange = Boolean(cpCurrent || cpNew || cpConfirm);
-
-    if (wantsPasswordChange) {
-      if (cpCurrent !== state.adminPassword) {
-        onNotify('Current password is incorrect.');
-        return;
-      }
-      if (!cpNew || cpNew.length < 4) {
-        onNotify('New password must be at least 4 characters.');
-        return;
-      }
-      if (cpNew !== cpConfirm) {
-        onNotify('New passwords do not match.');
-        return;
-      }
+    if (!state.isAdminLoggedIn) {
+      onNotify('Only Admin can change the Admin password.');
+      return;
+    }
+    if (!cpNew || cpNew.length < 4) {
+      onNotify('New password must be at least 4 characters.');
+      return;
+    }
+    if (cpNew !== cpConfirm) {
+      onNotify('New passwords do not match.');
+      return;
     }
 
     updateState((prev) => ({
       ...prev,
-      adminEmail: nextEmail,
-      adminPassword: wantsPasswordChange ? cpNew : prev.adminPassword,
+      adminEmail: LOCKED_ADMIN_EMAIL,
+      adminPassword: cpNew,
     }));
 
-    setCpCurrent('');
     setCpNew('');
     setCpConfirm('');
-    onNotify('Admin Email & Password saved!');
+    onNotify('Admin password updated!');
   };
 
   /* --- CLIENTS / USERS & WALLET HANDLERS --- */
@@ -1158,11 +1035,10 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
       configuredPaymentPlans[0]?.name ||
       'Monthly';
     const { amount: fallbackAmount, days: fallbackDays } = getPlanPricing(chosenPlan);
-    const days = target.pendingDays || fallbackDays;
-    const creditAmount =
-      target.status === 'pending' && !target.subscribed
-        ? Number(target.pendingAmount || fallbackAmount)
-        : 0;
+    const days = Math.max(1, Number(target.pendingDays || fallbackDays || 1));
+    const wasActive = Boolean(target.subscribed && target.expiry > Date.now());
+    const shouldCredit = target.status === 'pending' || !wasActive;
+    const creditAmount = shouldCredit ? Number(target.pendingAmount || fallbackAmount) : 0;
     const expiry = Date.now() + days * 86400000;
 
     updateState((prev) => {
@@ -1180,18 +1056,22 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
             }
           : u
       );
-      const subscribedCount = nextUsers.filter((u) => u.subscribed && u.status !== 'blocked').length;
+      const now = Date.now();
+      const subscribedCount = nextUsers.filter(
+        (u) => u.subscribed && u.status !== 'blocked' && u.expiry > now
+      ).length;
       const nextTx = creditAmount
         ? [
             {
-              id: 'tx_' + Date.now(),
+              id: 'tx_' + now,
+              name: target.name,
               phone: target.phone,
               email: target.email,
               plan: chosenPlan,
               amount: creditAmount,
               method: target.paymentMethod || 'Manual WhatsApp Approved',
               status: 'completed' as const,
-              createdAt: Date.now(),
+              createdAt: now,
             },
             ...(prev.walletTransactions || []),
           ]
@@ -1222,7 +1102,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
       };
     });
 
-    onNotify(`Approved ${target.phone} (${chosenPlan}).`);
+    onNotify(`Approved ${target.phone} (${chosenPlan} · ${days} ${days === 1 ? 'Day' : 'Days'}).`);
   };
 
   const blockUser = (userId: string) => {
@@ -1239,7 +1119,10 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
             }
           : u
       );
-      const subscribedCount = nextUsers.filter((u) => u.subscribed && u.status !== 'blocked').length;
+      const now = Date.now();
+      const subscribedCount = nextUsers.filter(
+        (u) => u.subscribed && u.status !== 'blocked' && u.expiry > now
+      ).length;
       const matchesCurrent =
         prev.currentUser &&
         prev.currentUser.role !== 'admin' &&
@@ -1270,7 +1153,10 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
 
     updateState((prev) => {
       const nextUsers = prev.users.filter((u) => u.id !== userId);
-      const subscribedCount = nextUsers.filter((u) => u.subscribed && u.status !== 'blocked').length;
+      const now = Date.now();
+      const subscribedCount = nextUsers.filter(
+        (u) => u.subscribed && u.status !== 'blocked' && u.expiry > now
+      ).length;
       const matchesCurrent =
         prev.currentUser &&
         prev.currentUser.role !== 'admin' &&
@@ -1297,7 +1183,8 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
       return;
     }
     const { amount, days } = getPlanPricing(newClientPlan);
-    const expiry = Date.now() + days * 86400000;
+    const validDays = Math.max(1, Number(days || 1));
+    const expiry = Date.now() + validDays * 86400000;
 
     updateState((prev) => {
       const existingIdx = prev.users.findIndex(
@@ -1329,16 +1216,19 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
           expiry,
         };
       }
-      const subscribedCount = nextUsers.filter((u) => u.subscribed && u.status !== 'blocked').length;
+      const now = Date.now();
+      const subscribedCount = nextUsers.filter(
+        (u) => u.subscribed && u.status !== 'blocked' && u.expiry > now
+      ).length;
       const nextTx = {
-        id: 'tx_' + Date.now(),
+        id: 'tx_' + now,
         phone,
         email,
         plan: newClientPlan,
         amount,
         method: 'Admin Manual Approval',
         status: 'completed' as const,
-        createdAt: Date.now(),
+        createdAt: now,
       };
       return {
         ...prev,
@@ -1351,7 +1241,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
 
     setNewClientPhone('');
     setNewClientEmail('');
-    onNotify(`Client ${phone} added & approved (${newClientPlan}).`);
+    onNotify(`Client ${phone} added & approved (${newClientPlan} · ${validDays} ${validDays === 1 ? 'Day' : 'Days'}).`);
   };
 
   const adjustWallet = (mode: 'add' | 'withdraw') => {
@@ -1385,8 +1275,11 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
 
   const switchAdminTab = (tab: AdminTab) => {
     setActiveTab(tab);
-    if (tab === 'settings') {
+    if (tab === 'settings' || tab === 'categories') {
       setSetAppName(state.settings.appName);
+      setSetGenreLine(
+        state.settings.genreLine !== undefined ? state.settings.genreLine : DEFAULT_GENRE_LINE
+      );
       const arr = Array.isArray(state.settings.r2Links) ? state.settings.r2Links : [];
       setSetR2Links([0, 1, 2, 3, 4].map((i) => arr[i] ?? (i === 0 ? state.settings.r2Endpoint || '' : '')));
       setSetPesapalKey(state.settings.pesapalKey);
@@ -1407,7 +1300,6 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
       setSetShowPosterYear(state.settings.showPosterYear !== false);
       setSetShowPosterActors(state.settings.showPosterActors !== false);
       setSetShowPosterDescription(state.settings.showPosterDescription !== false);
-      setSetAdminEmail(state.adminEmail || '');
     }
   };
 
@@ -1508,7 +1400,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
         <p className="text-xs text-[#b0aab8] tabular-nums">
           Movies: {state.movies.length} | Banners: {state.banners.length} | Series Seasons:{' '}
           {state.seasons.length} | Episodes: {state.episodes.length} | Live TV:{' '}
-          {state.liveTvChannels?.length || 0} | Categories: {state.categories.length}
+          {state.liveTvChannels?.length || 0} | Genres: {oneLineGenres.length}
         </p>
       </button>
 
@@ -1524,7 +1416,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
             ['banners', 'Banners'],
             ['series', 'Series'],
             ['livetv', 'Live TV'],
-            ['categories', 'Categories'],
+            ['categories', 'Genres'],
             ['settings', 'Settings'],
           ] as [AdminTab, string][]
         ).map(([tabKey, label]) => (
@@ -1822,6 +1714,13 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
                   })
                   .map((u) => {
                     const userStatus = u.status || (u.subscribed ? 'approved' : 'pending');
+                    const isExpired = Boolean(
+                      userStatus !== 'blocked' &&
+                        u.subscribed &&
+                        u.expiry > 0 &&
+                        u.expiry <= Date.now()
+                    );
+                    const badgeLabel = isExpired ? 'expired' : userStatus;
                     return (
                       <div
                         key={u.id}
@@ -1829,23 +1728,27 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
                       >
                         <div className="min-w-0 flex-1">
                           <div className="flex flex-wrap items-center gap-2">
-                            <span className="text-sm font-bold text-white">{u.phone}</span>
+                            <span className="text-sm font-bold text-white">
+                              {u.name ? `${u.name} · ${u.phone}` : u.phone}
+                            </span>
                             <span
                               className={`rounded px-2 py-0.5 text-[10px] font-extrabold uppercase ${
                                 userStatus === 'blocked'
                                   ? 'bg-rose-900/80 text-rose-200'
+                                  : isExpired
+                                  ? 'bg-amber-900/80 text-amber-200'
                                   : userStatus === 'approved' && u.subscribed
                                   ? 'bg-emerald-900/80 text-emerald-200'
                                   : 'bg-amber-900/80 text-amber-200'
                               }`}
                             >
-                              {userStatus}
+                              {badgeLabel}
                             </span>
                           </div>
                           <div className="truncate text-xs text-[#b0aab8]">{u.email}</div>
                           <div className="mt-0.5 text-[11px] text-[#e0d8ef]">
                             {u.subscribed && u.plan
-                              ? `Plan: ${u.plan} · Expires ${new Date(u.expiry).toLocaleDateString()}`
+                              ? `Plan: ${u.plan} · ${isExpired ? 'Expired' : 'Expires'} ${new Date(u.expiry).toLocaleString()}`
                               : u.pendingPlan
                               ? `Requested: ${u.pendingPlan} (UGX ${Number(u.pendingAmount || 0).toLocaleString()})`
                               : 'Not Subscribed'}
@@ -2058,92 +1961,40 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
                 </div>
               </div>
 
-              <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-                <div>
-                  <label className={labelCls}>Category</label>
-                  <select
-                    value={movieCategory}
-                    onChange={(e) => setMovieCategory(e.target.value)}
-                    className={inputCls}
-                  >
-                    <option value="">-- Select Category --</option>
-                    {mergedCategories.map((c) => (
-                      <option key={c} value={c}>
-                        {c}
-                      </option>
-                    ))}
-                  </select>
-                </div>
-                <div>
-                  <label className={labelCls}>Genre</label>
-                  <select
-                    value={movieGenre}
-                    onChange={(e) => setMovieGenre(e.target.value)}
-                    className={inputCls}
-                  >
-                    <option value="">-- Select Genre --</option>
-                    {mergedGenres.map((g) => (
-                      <option key={g} value={g}>
-                        {g}
-                      </option>
-                    ))}
-                  </select>
-                </div>
+              <div>
+                <label className={labelCls}>Genre (Select from 1-Line Genre List)</label>
+                <select
+                  value={movieGenre}
+                  onChange={(e) => setMovieGenre(e.target.value)}
+                  className={inputCls}
+                >
+                  <option value="">-- Select Genre --</option>
+                  {oneLineGenres.map((g) => (
+                    <option key={g} value={g}>
+                      {g}
+                    </option>
+                  ))}
+                  {movieGenre &&
+                    !oneLineGenres.some((g) => g.toLowerCase() === movieGenre.toLowerCase()) && (
+                      <option value={movieGenre}>{movieGenre}</option>
+                    )}
+                </select>
               </div>
 
-              <div>
-                <div className="mb-1.5 flex items-center justify-between gap-2">
-                  <label className="text-xs font-bold text-[#f0cf65]">
-                    Poster Tags (Tap to select multiple or add your own tag below)
+              {editMovieId && (
+                <div>
+                  <label className={labelCls}>
+                    Poster Label (Optional) — e.g. VIP
                   </label>
-                  {selectedMovieTags.length > 0 && (
-                    <button
-                      type="button"
-                      onClick={() => setMovieLabel('')}
-                      className="text-[11px] font-bold text-rose-300 hover:text-white"
-                    >
-                      Clear Tags
-                    </button>
-                  )}
-                </div>
-                <div className="mb-2 flex flex-wrap gap-1.5">
-                  {availableMovieTags.map((tag) => {
-                    const active = selectedMovieTags.some(
-                      (t) => t.toUpperCase() === tag.toUpperCase()
-                    );
-                    return (
-                      <button
-                        key={`mov-tag-${tag}`}
-                        type="button"
-                        onClick={() => toggleMovieTagOnPoster(tag)}
-                        className={`min-h-[34px] rounded-lg border px-2.5 py-1 text-[11px] font-bold transition-colors ${
-                          active
-                            ? 'border-[#d4af37] bg-[#6a0dad] text-[#f0cf65]'
-                            : 'border-white/20 bg-[#08070c] text-white/80 hover:border-[#d4af37]/60'
-                        }`}
-                      >
-                        {active ? `✓ ${tag}` : tag}
-                      </button>
-                    );
-                  })}
-                </div>
-                <div className="flex gap-2">
                   <input
                     type="text"
-                    value={inlineMovieTagInput}
-                    onChange={(e) => setInlineMovieTagInput(e.target.value)}
-                    placeholder="Type a new tag (e.g. EXCLUSIVE, SEASON 1, LUO)..."
+                    value={movieLabel}
+                    onChange={(e) => setMovieLabel(e.target.value)}
+                    placeholder="e.g. VIP (leave empty for clean poster)"
                     className={inputCls}
                   />
-                  <button
-                    type="button"
-                    onClick={addCustomTagWhileEditingPoster}
-                    className="min-h-[42px] shrink-0 rounded-lg border border-[#d4af37] bg-[#6a0dad] px-3.5 text-xs font-bold text-[#f0cf65]"
-                  >
-                    + Add Tag
-                  </button>
                 </div>
-              </div>
+              )}
 
               <div>
                 <label className={labelCls}>Name of Actors</label>
@@ -2210,16 +2061,11 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
                         referrerPolicy="no-referrer"
                         className="h-full w-full object-cover"
                       />
-                      {selectedMovieTags.length > 0 && (
+                      {editMovieId && movieLabel.trim() && (
                         <div className="absolute left-1.5 top-1.5 flex max-w-[78%] flex-wrap gap-1">
-                          {selectedMovieTags.slice(0, 3).map((tag) => (
-                            <span
-                              key={`prev-tag-${tag}`}
-                              className="rounded border border-[#d4af37] bg-[#6a0dad] px-1.5 py-0.5 text-[8px] font-extrabold text-[#f0cf65]"
-                            >
-                              {tag}
-                            </span>
-                          ))}
+                          <span className="rounded border border-[#d4af37] bg-[#6a0dad] px-1.5 py-0.5 text-[8px] font-extrabold text-[#f0cf65]">
+                            {movieLabel.trim()}
+                          </span>
                         </div>
                       )}
                       <div className="absolute inset-x-0 bottom-0 grid grid-cols-3 divide-x divide-white/15 border-t border-[#6a0dad] bg-[#0b0714]/90 py-1 text-center text-[8px] font-bold text-white">
@@ -2376,10 +2222,45 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
       {activeTab === 'banners' && (
         <div className="space-y-4">
           <div className="rounded-xl border border-[#d4af37]/30 bg-[#111018] p-4">
-            <h3 className="mb-3 font-display text-base font-extrabold text-[#d4af37]">
-              Banners (Max 5)
+            <h3 className="mb-1 font-display text-base font-extrabold text-[#d4af37]">
+              {editBannerId ? 'Edit Banner Settings' : 'Banner Settings (Max 5 · Auto-Flips Every 5 Seconds)'}
             </h3>
+            <p className="mb-3 text-xs text-[#b0aab8]">
+              Banners flip smoothly every 5 seconds. Optionally type Banner Text, Sub-Text, and Button Text below.
+            </p>
             <div className="space-y-3">
+              <div>
+                <label className={labelCls}>Banner Text</label>
+                <input
+                  type="text"
+                  value={bannerTitle}
+                  onChange={(e) => setBannerTitle(e.target.value)}
+                  placeholder="Type anything about this banner..."
+                  className={inputCls}
+                />
+              </div>
+              <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                <div>
+                  <label className={labelCls}>Banner Sub-Text</label>
+                  <input
+                    type="text"
+                    value={bannerSubText}
+                    onChange={(e) => setBannerSubText(e.target.value)}
+                    placeholder="e.g. Watch dubbed in Luo now"
+                    className={inputCls}
+                  />
+                </div>
+                <div>
+                  <label className={labelCls}>Banner Button Text</label>
+                  <input
+                    type="text"
+                    value={bannerButtonText}
+                    onChange={(e) => setBannerButtonText(e.target.value)}
+                    placeholder="e.g. Watch Now"
+                    className={inputCls}
+                  />
+                </div>
+              </div>
               <div>
                 <label className={labelCls}>Banner Image: Direct Upload Button</label>
                 <div className="flex flex-wrap items-center gap-2">
@@ -2429,7 +2310,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
                   onClick={saveBannerRecord}
                   className="min-h-[44px] rounded-lg bg-gradient-to-br from-[#d4af37] to-[#b58d1e] px-4 py-2 text-xs font-extrabold text-black"
                 >
-                  Save Banner
+                  {editBannerId ? 'Update Banner' : 'Save Banner'}
                 </button>
                 {editBannerId && (
                   <button
@@ -2457,15 +2338,27 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
                     key={b.id}
                     className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-[#d4af37]/25 bg-[#0a090f] p-2.5"
                   >
-                    <div className="flex items-center gap-3">
+                    <div className="flex min-w-0 items-center gap-3">
                       <AdminThumb srcRef={b.image} className="h-12 w-24 border border-[#d4af37]" />
-                      <div className="text-sm font-bold text-white">Banner #{idx + 1}</div>
+                      <div className="min-w-0">
+                        <div className="truncate text-sm font-bold text-white">
+                          {b.title?.trim() || `Banner #${idx + 1}`}
+                        </div>
+                        {(b.subText?.trim() || b.buttonText?.trim()) && (
+                          <div className="truncate text-xs text-[#b0aab8]">
+                            {[b.subText?.trim(), b.buttonText?.trim()].filter(Boolean).join(' · ')}
+                          </div>
+                        )}
+                      </div>
                     </div>
                     <div className="flex gap-2">
                       <button
                         type="button"
                         onClick={async () => {
                           setEditBannerId(b.id);
+                          setBannerTitle(b.title || '');
+                          setBannerSubText(b.subText || '');
+                          setBannerButtonText(b.buttonText || '');
                           setBannerLink(!b.image.startsWith('idb://') ? b.image : '');
                           setBannerPreview(await resolveMediaUrl(b.image));
                         }}
@@ -2521,6 +2414,18 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
                   className={inputCls}
                 />
               </div>
+              {editSeasonId && (
+                <div>
+                  <label className={labelCls}>Poster Label (Optional) — e.g. VIP</label>
+                  <input
+                    type="text"
+                    value={seasonLabel}
+                    onChange={(e) => setSeasonLabel(e.target.value)}
+                    placeholder="e.g. VIP (leave empty for clean poster)"
+                    className={inputCls}
+                  />
+                </div>
+              )}
               <div>
                 <label className={labelCls}>Series Poster (Direct Upload Button + Image Link)</label>
                 <div className="flex flex-wrap items-center gap-2">
@@ -2608,7 +2513,10 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
                       <AdminThumb srcRef={s.poster} className="h-14 w-10" />
                       <div>
                         <div className="text-sm font-bold text-white">{s.seriesTitle}</div>
-                        <div className="text-xs text-[#d4af37]">Season {s.seasonNumber}</div>
+                        <div className="text-xs text-[#d4af37]">
+                          Season {s.seasonNumber}
+                          {s.label ? ` · ${s.label}` : ''}
+                        </div>
                       </div>
                     </div>
                     <div className="flex flex-wrap gap-2">
@@ -2618,6 +2526,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
                           setEditSeasonId(s.id);
                           setSeasonSeriesTitle(s.seriesTitle);
                           setSeasonNumber(s.seasonNumber);
+                          setSeasonLabel(s.label || '');
                           setSeasonPosterRemoved(false);
                           setSeasonPosterLink(
                             s.poster && !s.poster.startsWith('idb://') ? s.poster : ''
@@ -2975,156 +2884,31 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
         </div>
       )}
 
-      {/* TAB 4: CATEGORIES & GENRES (SEPARATE FROM SETTINGS) */}
+      {/* TAB 4: ONE-LINE GENRE / CATEGORY */}
       {activeTab === 'categories' && (
         <div className="space-y-4">
           <div className="rounded-xl border border-[#d4af37]/30 bg-[#111018] p-4">
-            <h3 className="mb-3 font-display text-base font-extrabold text-[#d4af37]">Categories</h3>
-            <div className="space-y-3">
-              <div>
-                <label className={labelCls}>Category Name</label>
-                <input
-                  type="text"
-                  value={categoryName}
-                  onChange={(e) => setCategoryName(e.target.value)}
-                  placeholder="e.g. Christian Movies, Action, Luo Drama"
-                  className={inputCls}
-                />
-              </div>
-              <div className="flex flex-wrap gap-2">
-                <button
-                  type="button"
-                  onClick={() => {
-                    setEditCategoryId('');
-                    setCategoryName('');
-                  }}
-                  className="min-h-[44px] rounded-lg border border-[#d4af37] bg-gradient-to-br from-[#6a0dad] to-[#4b077e] px-4 py-2 text-xs font-bold text-white"
-                >
-                  + Add Category
-                </button>
-                <button
-                  type="button"
-                  onClick={saveCategoryRecord}
-                  className="min-h-[44px] rounded-lg bg-gradient-to-br from-[#d4af37] to-[#b58d1e] px-4 py-2 text-xs font-extrabold text-black"
-                >
-                  Save
-                </button>
-              </div>
-            </div>
-            <div className="mt-4 space-y-2">
-              {state.categories.length === 0 ? (
-                <p className="text-xs text-[#b0aab8]">No categories yet.</p>
-              ) : (
-                state.categories.map((c) => (
-                  <div
-                    key={c.id}
-                    className="flex items-center justify-between gap-2 rounded-lg border border-[#d4af37]/25 bg-[#0a090f] p-2.5"
-                  >
-                    <span className="text-sm font-bold text-white">{c.name}</span>
-                    <div className="flex gap-2">
-                      <button
-                        type="button"
-                        onClick={() => {
-                          setEditCategoryId(c.id);
-                          setCategoryName(c.name);
-                        }}
-                        className="min-h-[40px] rounded-md border border-[#d4af37] bg-[#6a0dad] px-3 py-1.5 text-xs font-bold text-[#d4af37]"
-                      >
-                        Edit
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => {
-                          updateState((prev) => ({
-                            ...prev,
-                            categories: prev.categories.filter((x) => x.id !== c.id),
-                          }));
-                          onNotify('Category deleted.');
-                        }}
-                        className="min-h-[40px] rounded-md bg-[#b71c1c] px-3 py-1.5 text-xs font-bold text-white"
-                      >
-                        Delete
-                      </button>
-                    </div>
-                  </div>
-                ))
-              )}
-            </div>
-          </div>
-
-          <div className="rounded-xl border border-[#d4af37]/30 bg-[#111018] p-4">
-            <h3 className="mb-3 font-display text-base font-extrabold text-[#d4af37]">
-              Genres (Separate)
+            <h3 className="mb-1 font-display text-base font-extrabold text-[#d4af37]">
+              Genres / Categories (One Single Line)
             </h3>
-            <div className="space-y-3">
-              <div>
-                <label className={labelCls}>Genre Name</label>
-                <input
-                  type="text"
-                  value={genreName}
-                  onChange={(e) => setGenreName(e.target.value)}
-                  placeholder="e.g. Faith, Thriller, Comedy"
-                  className={inputCls}
-                />
-              </div>
-              <div className="flex flex-wrap gap-2">
-                <button
-                  type="button"
-                  onClick={() => {
-                    setEditGenreId('');
-                    setGenreName('');
-                  }}
-                  className="min-h-[44px] rounded-lg border border-[#d4af37] bg-gradient-to-br from-[#6a0dad] to-[#4b077e] px-4 py-2 text-xs font-bold text-white"
-                >
-                  + Add Genre
-                </button>
-                <button
-                  type="button"
-                  onClick={saveGenreRecord}
-                  className="min-h-[44px] rounded-lg bg-gradient-to-br from-[#d4af37] to-[#b58d1e] px-4 py-2 text-xs font-extrabold text-black"
-                >
-                  Save
-                </button>
-              </div>
-            </div>
-            <div className="mt-4 space-y-2">
-              {state.genres.length === 0 ? (
-                <p className="text-xs text-[#b0aab8]">No genres yet.</p>
-              ) : (
-                state.genres.map((g) => (
-                  <div
-                    key={g.id}
-                    className="flex items-center justify-between gap-2 rounded-lg border border-[#d4af37]/25 bg-[#0a090f] p-2.5"
-                  >
-                    <span className="text-sm font-bold text-white">{g.name}</span>
-                    <div className="flex gap-2">
-                      <button
-                        type="button"
-                        onClick={() => {
-                          setEditGenreId(g.id);
-                          setGenreName(g.name);
-                        }}
-                        className="min-h-[40px] rounded-md border border-[#d4af37] bg-[#6a0dad] px-3 py-1.5 text-xs font-bold text-[#d4af37]"
-                      >
-                        Edit
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => {
-                          updateState((prev) => ({
-                            ...prev,
-                            genres: prev.genres.filter((x) => x.id !== g.id),
-                          }));
-                          onNotify('Genre deleted.');
-                        }}
-                        className="min-h-[40px] rounded-md bg-[#b71c1c] px-3 py-1.5 text-xs font-bold text-white"
-                      >
-                        Delete
-                      </button>
-                    </div>
-                  </div>
-                ))
-              )}
+            <p className="mb-3 text-xs text-[#b0aab8]">
+              Add or remove genres anytime in this single line, separated by commas. Changes update instantly for customers and movie upload.
+            </p>
+            <div className="flex flex-wrap gap-2">
+              <input
+                type="text"
+                value={setGenreLine}
+                onChange={(e) => setSetGenreLine(e.target.value)}
+                placeholder={DEFAULT_GENRE_LINE}
+                className={`${inputCls} min-w-[240px] flex-1`}
+              />
+              <button
+                type="button"
+                onClick={saveGenreLine}
+                className="min-h-[42px] shrink-0 rounded-lg bg-gradient-to-br from-[#d4af37] to-[#b58d1e] px-5 py-2 text-xs font-extrabold text-black"
+              >
+                Save Genres
+              </button>
             </div>
           </div>
         </div>
@@ -3361,45 +3145,34 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
             </div>
           </div>
 
-          {/* 1. ADMIN SIGN-IN CREDENTIALS (EMAIL & PASSWORD) */}
+          {/* 1. ADMIN SIGN-IN CREDENTIALS (LOCKED TO ONE EMAIL, AT-WILL PASSWORD CHANGE) */}
           <div className="rounded-xl border border-[#d4af37]/30 bg-[#111018] p-4">
             <h3 className="mb-1 font-display text-base font-extrabold text-[#d4af37]">
-              Admin Sign-In (Email & Password)
+              Admin Sign-In Security (Locked Email)
             </h3>
             <p className="mb-3 text-xs text-[#b0aab8]">
-              Default password is <span className="font-bold text-white">vjemma123</span>. Set a
-              specific Admin Email (or leave blank to allow any email with your Admin Password) and
-              update your password anytime.
+              Admin access is locked to <span className="font-bold text-white">{LOCKED_ADMIN_EMAIL}</span> via{' '}
+              <span className="font-bold text-[#f0cf65]">/admin</span>. Only signed-in Admin can change the password at will.
             </p>
             <div className="space-y-3">
               <div>
-                <label className={labelCls}>Admin Sign-In Email</label>
+                <label className={labelCls}>Locked Admin Email</label>
                 <input
                   type="email"
-                  value={setAdminEmail}
-                  onChange={(e) => setSetAdminEmail(e.target.value)}
-                  placeholder="admin@vjemma.site (optional)"
-                  className={inputCls}
+                  value={LOCKED_ADMIN_EMAIL}
+                  readOnly
+                  disabled
+                  className={`${inputCls} cursor-not-allowed opacity-75`}
                 />
               </div>
-              <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
+              <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
                 <div>
-                  <label className={labelCls}>Current Password</label>
-                  <input
-                    type="password"
-                    value={cpCurrent}
-                    onChange={(e) => setCpCurrent(e.target.value)}
-                    placeholder="Current (e.g. vjemma123)"
-                    className={inputCls}
-                  />
-                </div>
-                <div>
-                  <label className={labelCls}>New Password</label>
+                  <label className={labelCls}>New Admin Password</label>
                   <input
                     type="password"
                     value={cpNew}
                     onChange={(e) => setCpNew(e.target.value)}
-                    placeholder="New password"
+                    placeholder="Enter new password"
                     className={inputCls}
                   />
                 </div>
@@ -3419,7 +3192,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
                 onClick={handleSaveAdminCredentials}
                 className="min-h-[44px] rounded-lg bg-gradient-to-br from-[#d4af37] to-[#b58d1e] px-4 py-2 text-xs font-extrabold text-black"
               >
-                Save Admin Email & Password
+                Update Admin Password
               </button>
             </div>
           </div>
@@ -3650,84 +3423,40 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
                   />
                 </div>
                 <div>
-                  <div className="mb-1 flex items-center justify-between gap-2">
-                    <span className="text-[11px] font-bold text-[#f0cf65]">
-                      Poster Tags (Tap to toggle multiple or add new tag)
-                    </span>
-                    {selectedMovieTags.length > 0 && (
-                      <button
-                        type="button"
-                        onClick={() => setMovieLabel('')}
-                        className="text-[11px] font-bold text-rose-300 hover:text-white"
-                      >
-                        Clear
-                      </button>
-                    )}
-                  </div>
-                  <div className="mb-2 flex flex-wrap gap-1.5">
-                    {availableMovieTags.map((tag) => {
-                      const active = selectedMovieTags.some(
-                        (t) => t.toUpperCase() === tag.toUpperCase()
-                      );
-                      return (
-                        <button
-                          key={`set-mov-tag-${tag}`}
-                          type="button"
-                          onClick={() => toggleMovieTagOnPoster(tag)}
-                          className={`min-h-[32px] rounded-lg border px-2.5 py-1 text-[11px] font-bold transition-colors ${
-                            active
-                              ? 'border-[#d4af37] bg-[#6a0dad] text-[#f0cf65]'
-                              : 'border-white/20 bg-[#111018] text-white/80 hover:border-[#d4af37]/60'
-                          }`}
-                        >
-                          {active ? `✓ ${tag}` : tag}
-                        </button>
-                      );
-                    })}
-                  </div>
-                  <div className="flex gap-2">
-                    <input
-                      type="text"
-                      value={inlineMovieTagInput}
-                      onChange={(e) => setInlineMovieTagInput(e.target.value)}
-                      placeholder="Add new tag while editing poster..."
-                      className={inputCls}
-                    />
-                    <button
-                      type="button"
-                      onClick={addCustomTagWhileEditingPoster}
-                      className="min-h-[42px] shrink-0 rounded-lg border border-[#d4af37] bg-[#6a0dad] px-3 text-xs font-bold text-[#f0cf65]"
-                    >
-                      + Add Tag
-                    </button>
-                  </div>
-                </div>
-                <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
-                  <select
-                    value={movieCategory}
-                    onChange={(e) => setMovieCategory(e.target.value)}
-                    className={inputCls}
-                  >
-                    <option value="">-- Select Category --</option>
-                    {mergedCategories.map((c) => (
-                      <option key={`set-cat-${c}`} value={c}>
-                        {c}
-                      </option>
-                    ))}
-                  </select>
+                  <label className="mb-1 block text-[11px] font-bold text-[#f0cf65]">
+                    Genre (from 1-line Genre List)
+                  </label>
                   <select
                     value={movieGenre}
                     onChange={(e) => setMovieGenre(e.target.value)}
                     className={inputCls}
                   >
                     <option value="">-- Select Genre --</option>
-                    {mergedGenres.map((g) => (
+                    {oneLineGenres.map((g) => (
                       <option key={`set-gen-${g}`} value={g}>
                         {g}
                       </option>
                     ))}
+                    {movieGenre &&
+                      !oneLineGenres.some((g) => g.toLowerCase() === movieGenre.toLowerCase()) && (
+                        <option value={movieGenre}>{movieGenre}</option>
+                      )}
                   </select>
                 </div>
+                {editMovieId && (
+                  <div>
+                    <label className="mb-1 block text-[11px] font-bold text-[#f0cf65]">
+                      Poster Label (Optional) — e.g. VIP
+                    </label>
+                    <input
+                      type="text"
+                      value={movieLabel}
+                      onChange={(e) => setMovieLabel(e.target.value)}
+                      placeholder="e.g. VIP (leave empty for clean poster)"
+                      className={inputCls}
+                    />
+                  </div>
+                )}
                 <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
                   <input
                     type="text"
@@ -3821,16 +3550,11 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
                         referrerPolicy="no-referrer"
                         className="h-full w-full object-cover"
                       />
-                      {selectedMovieTags.length > 0 && (
+                      {editMovieId && movieLabel.trim() && (
                         <div className="absolute left-1 top-1 flex max-w-[82%] flex-wrap gap-0.5">
-                          {selectedMovieTags.slice(0, 2).map((tag) => (
-                            <span
-                              key={`set-prev-tag-${tag}`}
-                              className="rounded border border-[#d4af37] bg-[#6a0dad] px-1 py-0.5 text-[7px] font-extrabold text-[#f0cf65]"
-                            >
-                              {tag}
-                            </span>
-                          ))}
+                          <span className="rounded border border-[#d4af37] bg-[#6a0dad] px-1 py-0.5 text-[7px] font-extrabold text-[#f0cf65]">
+                            {movieLabel.trim()}
+                          </span>
                         </div>
                       )}
                       <div className="absolute inset-x-0 bottom-0 grid grid-cols-3 divide-x divide-white/15 border-t border-[#6a0dad] bg-[#0b0714]/90 py-1 text-center text-[8px] font-bold text-white">
@@ -3905,184 +3629,29 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
             </div>
           </div>
 
-          {/* 5B. ADD MORE CATEGORIES, GENRES & MOVIE TAGGING INSIDE SETTINGS */}
-          <div className="rounded-xl border border-[#d4af37]/30 bg-[#111018] p-4">
+          {/* 5B. GENRE / CATEGORY - ONE SINGLE LINE INSIDE SETTINGS */}
+          <div className="rounded-xl border-2 border-[#d4af37]/50 bg-[#111018] p-4">
             <h3 className="mb-1 font-display text-base font-extrabold text-[#d4af37]">
-              Categories, Genres &amp; Movie Tagging
+              Genres / Categories (One Single Line)
             </h3>
             <p className="mb-3 text-xs text-[#b0aab8]">
-              Add, edit, or delete Categories, Genres, and Movie Tags (TRENDING, NEW RELEASE,
-              LUO DUBBED, HOT, TOP 10, or custom tags) directly inside Settings.
+              Edit this single line to add or remove genres anytime, separated by commas. Updates apply instantly for customers and movie upload.
             </p>
-
-            <div className="grid grid-cols-1 gap-4 lg:grid-cols-3">
-              {/* Categories inside Settings */}
-              <div className="rounded-lg border border-[#6a0dad]/50 bg-[#09080f] p-3">
-                <h4 className="mb-2 font-display text-sm font-extrabold text-[#f0cf65]">
-                  Categories ({state.categories.length})
-                </h4>
-                <div className="mb-2.5 flex gap-2">
-                  <input
-                    type="text"
-                    value={categoryName}
-                    onChange={(e) => setCategoryName(e.target.value)}
-                    placeholder="New category..."
-                    className={inputCls}
-                  />
-                  <button
-                    type="button"
-                    onClick={saveCategoryRecord}
-                    className="min-h-[42px] shrink-0 rounded-lg bg-[#d4af37] px-3 text-xs font-extrabold text-black"
-                  >
-                    {editCategoryId ? 'Update' : 'Add'}
-                  </button>
-                </div>
-                <div className="max-h-48 space-y-1.5 overflow-y-auto pr-1">
-                  {state.categories.map((c) => (
-                    <div
-                      key={`set-cat-item-${c.id}`}
-                      className="flex items-center justify-between gap-2 rounded border border-[#d4af37]/20 bg-[#111018] px-2.5 py-1.5"
-                    >
-                      <span className="truncate text-xs font-bold text-white">{c.name}</span>
-                      <div className="flex shrink-0 gap-1">
-                        <button
-                          type="button"
-                          onClick={() => {
-                            setEditCategoryId(c.id);
-                            setCategoryName(c.name);
-                          }}
-                          className="rounded border border-[#d4af37]/60 bg-[#6a0dad] px-2 py-0.5 text-[10px] font-bold text-[#f0cf65]"
-                        >
-                          Edit
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => {
-                            updateState((prev) => ({
-                              ...prev,
-                              categories: prev.categories.filter((x) => x.id !== c.id),
-                            }));
-                            onNotify('Category deleted.');
-                          }}
-                          className="rounded bg-[#b71c1c] px-2 py-0.5 text-[10px] font-bold text-white"
-                        >
-                          Del
-                        </button>
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              </div>
-
-              {/* Genres inside Settings */}
-              <div className="rounded-lg border border-[#6a0dad]/50 bg-[#09080f] p-3">
-                <h4 className="mb-2 font-display text-sm font-extrabold text-[#f0cf65]">
-                  Genres ({state.genres.length})
-                </h4>
-                <div className="mb-2.5 flex gap-2">
-                  <input
-                    type="text"
-                    value={genreName}
-                    onChange={(e) => setGenreName(e.target.value)}
-                    placeholder="New genre..."
-                    className={inputCls}
-                  />
-                  <button
-                    type="button"
-                    onClick={saveGenreRecord}
-                    className="min-h-[42px] shrink-0 rounded-lg bg-[#d4af37] px-3 text-xs font-extrabold text-black"
-                  >
-                    {editGenreId ? 'Update' : 'Add'}
-                  </button>
-                </div>
-                <div className="max-h-48 space-y-1.5 overflow-y-auto pr-1">
-                  {state.genres.map((g) => (
-                    <div
-                      key={`set-gen-item-${g.id}`}
-                      className="flex items-center justify-between gap-2 rounded border border-[#d4af37]/20 bg-[#111018] px-2.5 py-1.5"
-                    >
-                      <span className="truncate text-xs font-bold text-white">{g.name}</span>
-                      <div className="flex shrink-0 gap-1">
-                        <button
-                          type="button"
-                          onClick={() => {
-                            setEditGenreId(g.id);
-                            setGenreName(g.name);
-                          }}
-                          className="rounded border border-[#d4af37]/60 bg-[#6a0dad] px-2 py-0.5 text-[10px] font-bold text-[#f0cf65]"
-                        >
-                          Edit
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => {
-                            updateState((prev) => ({
-                              ...prev,
-                              genres: prev.genres.filter((x) => x.id !== g.id),
-                            }));
-                            onNotify('Genre deleted.');
-                          }}
-                          className="rounded bg-[#b71c1c] px-2 py-0.5 text-[10px] font-bold text-white"
-                        >
-                          Del
-                        </button>
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              </div>
-
-              {/* Movie Tagging inside Settings */}
-              <div className="rounded-lg border border-[#6a0dad]/50 bg-[#09080f] p-3">
-                <h4 className="mb-2 font-display text-sm font-extrabold text-[#f0cf65]">
-                  Movie Tags ({configuredMovieTags.length})
-                </h4>
-                <div className="mb-2.5 flex gap-2">
-                  <input
-                    type="text"
-                    value={movieTagInput}
-                    onChange={(e) => setMovieTagInput(e.target.value)}
-                    placeholder="New tag (e.g. EXCLUSIVE)"
-                    className={inputCls}
-                  />
-                  <button
-                    type="button"
-                    onClick={saveMovieTagRecord}
-                    className="min-h-[42px] shrink-0 rounded-lg bg-[#d4af37] px-3 text-xs font-extrabold text-black"
-                  >
-                    {editMovieTagOld ? 'Update' : 'Add'}
-                  </button>
-                </div>
-                <div className="max-h-48 space-y-1.5 overflow-y-auto pr-1">
-                  {configuredMovieTags.map((tag) => (
-                    <div
-                      key={`set-tag-item-${tag}`}
-                      className="flex items-center justify-between gap-2 rounded border border-[#d4af37]/20 bg-[#111018] px-2.5 py-1.5"
-                    >
-                      <span className="truncate text-xs font-bold text-[#f0cf65]">{tag}</span>
-                      <div className="flex shrink-0 gap-1">
-                        <button
-                          type="button"
-                          onClick={() => {
-                            setEditMovieTagOld(tag);
-                            setMovieTagInput(tag);
-                          }}
-                          className="rounded border border-[#d4af37]/60 bg-[#6a0dad] px-2 py-0.5 text-[10px] font-bold text-[#f0cf65]"
-                        >
-                          Edit
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => deleteMovieTag(tag)}
-                          className="rounded bg-[#b71c1c] px-2 py-0.5 text-[10px] font-bold text-white"
-                        >
-                          Del
-                        </button>
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              </div>
+            <div className="flex flex-wrap gap-2">
+              <input
+                type="text"
+                value={setGenreLine}
+                onChange={(e) => setSetGenreLine(e.target.value)}
+                placeholder={DEFAULT_GENRE_LINE}
+                className={`${inputCls} min-w-[240px] flex-1`}
+              />
+              <button
+                type="button"
+                onClick={saveGenreLine}
+                className="min-h-[42px] shrink-0 rounded-lg bg-gradient-to-br from-[#d4af37] to-[#b58d1e] px-5 py-2 text-xs font-extrabold text-black"
+              >
+                Save Genres
+              </button>
             </div>
           </div>
 

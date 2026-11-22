@@ -1,7 +1,54 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { X, Play, Pause, Download, Maximize2, Minimize2, MessageCircle, MessageSquare, ShieldCheck } from 'lucide-react';
+import {
+  X,
+  Play,
+  Pause,
+  Download,
+  Maximize2,
+  Minimize2,
+  MessageCircle,
+  MessageSquare,
+  ShieldCheck,
+  CheckCircle2,
+  AlertTriangle,
+  Loader2,
+  Crown,
+  Lock,
+} from 'lucide-react';
 import { getSocialPlatformItems, normalizeSocialUrl, WHATSAPP_ADMIN_PHONE, WHATSAPP_DISPLAY_PHONE } from '../storage';
-import type { AppSettings, CommentItem, InfoModalType, PendingPlan, PlayerMedia, SessionUser } from '../types';
+import type { AppSettings, CommentItem, InfoModalType, PaymentPlan, PendingPlan, PlayerMedia, SessionUser } from '../types';
+
+export const PESAPAL_WORKER_URL = 'https://vjemma-pesapal.piwantonny.workers.dev';
+export const PENDING_PESAPAL_ORDER_KEY = 'vj_emma_pending_pesapal_order';
+
+export interface PendingPesapalOrder {
+  orderId?: string;
+  name: string;
+  phone: string;
+  email: string;
+  planName: string;
+  amount: number;
+  days: number;
+  method: string;
+  createdAt: number;
+}
+
+export interface WorkerStatusResponse {
+  status?: string;
+  payment_status_description?: string;
+  payment_status?: string;
+  orderId?: string;
+  order_tracking_id?: string;
+  amount?: number | string;
+  name?: string;
+  email?: string;
+  phone?: string;
+  planName?: string;
+  days?: number | string;
+  confirmation_code?: string;
+  message?: string;
+  error?: string;
+}
 
 interface ModalShellProps {
   open: boolean;
@@ -61,6 +108,12 @@ export const AuthModal: React.FC<AuthModalProps> = ({ open, onClose, onSubmit })
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
 
+  useEffect(() => {
+    if (open) {
+      setPassword('');
+    }
+  }, [open]);
+
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     onSubmit(phone.trim(), email.trim(), password);
@@ -112,13 +165,156 @@ export const AuthModal: React.FC<AuthModalProps> = ({ open, onClose, onSubmit })
   );
 };
 
+interface AdminLoginPageProps {
+  onSubmit: (email: string, password: string) => void;
+  onReturnSite: () => void;
+}
+
+export const AdminLoginPage: React.FC<AdminLoginPageProps> = ({ onSubmit, onReturnSite }) => {
+  const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
+
+  const handleSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    onSubmit(email.trim(), password);
+  };
+
+  return (
+    <div className="mx-auto max-w-[460px] px-4 py-10">
+      <div className="rounded-2xl border-2 border-[#d4af37]/70 bg-[#111018] p-6 shadow-2xl">
+        <div className="mb-4 flex items-center gap-2.5 border-b border-white/10 pb-3">
+          <ShieldCheck className="h-6 w-6 text-[#d4af37]" />
+          <div>
+            <h1 className="font-display text-lg font-extrabold text-[#f0cf65]">
+              Admin Sign In
+            </h1>
+            <p className="text-xs text-white/70">
+              Restricted to authorized Admin email only.
+            </p>
+          </div>
+        </div>
+
+        <form onSubmit={handleSubmit} className="space-y-3.5">
+          <div>
+            <label className="mb-1.5 block text-xs font-bold text-[#f0cf65]">
+              Admin Email Address
+            </label>
+            <input
+              type="email"
+              value={email}
+              onChange={(e) => setEmail(e.target.value)}
+              placeholder="Authorized admin email"
+              required
+              className="w-full min-h-[44px] rounded-lg border border-[#6a0dad]/60 bg-[#08070c] px-3 py-2.5 text-sm text-white placeholder-white/40 focus:border-[#d4af37] focus:outline-none"
+            />
+          </div>
+          <div>
+            <label className="mb-1.5 block text-xs font-bold text-[#f0cf65]">
+              Admin Password
+            </label>
+            <input
+              type="password"
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
+              placeholder="Enter admin password"
+              required
+              className="w-full min-h-[44px] rounded-lg border border-[#6a0dad]/60 bg-[#08070c] px-3 py-2.5 text-sm text-white placeholder-white/40 focus:border-[#d4af37] focus:outline-none"
+            />
+          </div>
+          <button
+            type="submit"
+            className="mt-2 flex min-h-[46px] w-full items-center justify-center rounded-lg bg-gradient-to-br from-[#d4af37] to-[#b58d1e] px-4 py-2.5 text-sm font-extrabold text-black transition-transform active:scale-[0.98]"
+          >
+            Sign In to Admin
+          </button>
+          <button
+            type="button"
+            onClick={onReturnSite}
+            className="flex min-h-[40px] w-full items-center justify-center rounded-lg border border-white/15 bg-white/5 px-4 py-2 text-xs font-bold text-white/80 hover:text-white"
+          >
+            Back to Site
+          </button>
+        </form>
+      </div>
+    </div>
+  );
+};
+
+interface PlansModalProps {
+  open: boolean;
+  plans: PaymentPlan[];
+  onClose: () => void;
+  onSelectPlan: (plan: PendingPlan) => void;
+}
+
+export const PlansModal: React.FC<PlansModalProps> = ({
+  open,
+  plans,
+  onClose,
+  onSelectPlan,
+}) => {
+  return (
+    <ModalShell
+      open={open}
+      onClose={onClose}
+      title="Choose Subscription Plan"
+      maxWidthClass="max-w-[760px]"
+    >
+      <p className="mb-4 text-sm text-white/85">
+        Subscribe to watch &amp; download Luo movies, series, and Live TV. Pay securely with Pesapal or Manual WhatsApp ({WHATSAPP_DISPLAY_PHONE}).
+      </p>
+      <div className="grid grid-cols-1 gap-3.5 sm:grid-cols-3">
+        {plans.map((planItem, idx) => {
+          const isFeatured = idx === plans.length - 1 && plans.length > 1;
+          return (
+            <div
+              key={planItem.id}
+              className={`flex flex-col gap-2.5 rounded-xl border-2 p-4 ${
+                isFeatured
+                  ? 'border-[#d4af37] bg-gradient-to-b from-[#6a0dad]/40 to-[#110e1a]'
+                  : 'border-[#6a0dad] bg-[#0b0912]'
+              }`}
+            >
+              <div className="flex items-center justify-between gap-2">
+                <div className="font-display text-base font-bold text-[#f0cf65]">
+                  {planItem.name}
+                </div>
+                {isFeatured && <Crown className="h-4 w-4 text-[#d4af37]" />}
+              </div>
+              <div className="text-2xl font-black text-white tabular-nums">
+                UGX {Number(planItem.price).toLocaleString()}
+              </div>
+              <p className="text-xs leading-relaxed text-white/80">
+                {planItem.days} {planItem.days === 1 ? 'Day' : 'Days'} unlimited streaming &amp; downloads.
+              </p>
+              <button
+                type="button"
+                onClick={() =>
+                  onSelectPlan({
+                    planName: planItem.name,
+                    amount: Number(planItem.price),
+                    days: Number(planItem.days),
+                  })
+                }
+                className="mt-auto min-h-[44px] w-full rounded-lg bg-gradient-to-r from-[#d4af37] to-[#f0cf65] px-3 py-2 text-xs font-black uppercase tracking-wide text-black transition-transform active:scale-[0.98]"
+              >
+                PAY / BOOK NOW
+              </button>
+            </div>
+          );
+        })}
+      </div>
+    </ModalShell>
+  );
+};
+
 interface PesapalModalProps {
   open: boolean;
   onClose: () => void;
   plan: PendingPlan | null;
   currentUser: SessionUser | null;
-  onCompletePayment: (phone: string, email: string, method: string) => void;
-  onManualWhatsappPayment: (phone: string, email: string, method: string) => void;
+  onManualWhatsappPayment: (phone: string, email: string, method: string, name?: string) => void;
+  onNotify: (msg: string) => void;
 }
 
 export const PesapalModal: React.FC<PesapalModalProps> = ({
@@ -126,38 +322,126 @@ export const PesapalModal: React.FC<PesapalModalProps> = ({
   onClose,
   plan,
   currentUser,
-  onCompletePayment,
   onManualWhatsappPayment,
+  onNotify,
 }) => {
+  const [name, setName] = useState('');
   const [phone, setPhone] = useState('');
   const [email, setEmail] = useState('');
   const [method, setMethod] = useState('MTN Mobile Money');
   const [manualSubmitted, setManualSubmitted] = useState(false);
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [errorMsg, setErrorMsg] = useState<string | null>(null);
 
   useEffect(() => {
     if (open) {
+      setName(currentUser?.name || (currentUser?.email ? currentUser.email.split('@')[0] : ''));
       setPhone(currentUser?.phone || '');
       setEmail(currentUser?.email || '');
       setManualSubmitted(false);
+      setIsSubmitting(false);
+      setErrorMsg(null);
     }
   }, [open, currentUser]);
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    onCompletePayment(phone.trim(), email.trim(), method);
+    if (!plan) return;
+    const cleanName = name.trim();
+    const cleanPhone = phone.trim();
+    const cleanEmail = email.trim();
+
+    if (!cleanName || !cleanPhone || !cleanEmail) {
+      const msg = 'Enter your full name, phone number, and email address.';
+      setErrorMsg(msg);
+      onNotify(msg);
+      return;
+    }
+
+    const amount = Number(plan.amount);
+    const pendingOrder: PendingPesapalOrder = {
+      name: cleanName,
+      phone: cleanPhone,
+      email: cleanEmail,
+      planName: plan.planName,
+      amount,
+      days: Number(plan.days || 1),
+      method,
+      createdAt: Date.now(),
+    };
+
+    try {
+      localStorage.setItem(PENDING_PESAPAL_ORDER_KEY, JSON.stringify(pendingOrder));
+    } catch {
+      // Ignore storage quota issues
+    }
+
+    setIsSubmitting(true);
+    setErrorMsg(null);
+
+    try {
+      const callbackUrl = `${window.location.origin}/payment-success`;
+      const response = await fetch(PESAPAL_WORKER_URL, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          amount,
+          name: cleanName,
+          email: cleanEmail,
+          phone: cleanPhone,
+          planName: plan.planName,
+          days: Number(plan.days || 1),
+          callback_url: callbackUrl,
+        }),
+      });
+
+      const data = await response.json().catch(() => ({}));
+      const redirectUrl = data?.redirect_url || data?.redirectUrl || data?.url;
+      const returnedOrderId = data?.orderId || data?.order_tracking_id || data?.orderTrackingId;
+
+      if (returnedOrderId) {
+        try {
+          localStorage.setItem(
+            PENDING_PESAPAL_ORDER_KEY,
+            JSON.stringify({ ...pendingOrder, orderId: String(returnedOrderId) })
+          );
+        } catch {
+          // Ignore storage issues
+        }
+      }
+
+      if (!response.ok || !redirectUrl) {
+        const msg =
+          data?.error ||
+          data?.message ||
+          'Could not initiate Pesapal checkout. Try again or pay manually with WhatsApp.';
+        setErrorMsg(msg);
+        onNotify(msg);
+        setIsSubmitting(false);
+        return;
+      }
+
+      window.location.href = String(redirectUrl);
+    } catch {
+      const msg = 'Network error connecting to Pesapal. Try again or use Manual WhatsApp below.';
+      setErrorMsg(msg);
+      onNotify(msg);
+      setIsSubmitting(false);
+    }
   };
 
   const handleManualSubmit = () => {
     const cleanPhone = phone.trim();
     const cleanEmail = email.trim();
-    onManualWhatsappPayment(cleanPhone, cleanEmail, method);
+    const cleanName = name.trim();
+    onManualWhatsappPayment(cleanPhone, cleanEmail, method, cleanName);
     if (cleanPhone && cleanEmail) {
       setManualSubmitted(true);
     }
   };
 
   const whatsappMessage = plan
-    ? `Hello VJ EMMA - TRUE LIGHT PRODUCTION, I am paying manually for the ${plan.planName} Plan (UGX ${Number(plan.amount).toLocaleString()} / ${plan.days} days). Phone: ${phone.trim()}, Email: ${email.trim()}, Method: ${method}. Please approve my account.`
+    ? `Hello VJ EMMA - TRUE LIGHT PRODUCTION, I am paying manually for the ${plan.planName} Plan (UGX ${Number(plan.amount).toLocaleString()} / ${plan.days} days). Name: ${name.trim()}, Phone: ${phone.trim()}, Email: ${email.trim()}, Method: ${method}. Please approve my account.`
     : '';
   const whatsappHref = `https://wa.me/${WHATSAPP_ADMIN_PHONE}?text=${encodeURIComponent(whatsappMessage)}`;
 
@@ -170,14 +454,33 @@ export const PesapalModal: React.FC<PesapalModalProps> = ({
             UGX {Number(plan.amount).toLocaleString()}
           </div>
           <div className="mt-1 text-xs text-[#b0aab8]">
-            Validity: {plan.days} Days · Pesapal or Manual WhatsApp
+            Validity: {plan.days} {plan.days === 1 ? 'Day' : 'Days'} · Pesapal or Manual WhatsApp
           </div>
         </div>
       )}
+
+      {errorMsg && (
+        <div className="mb-3 rounded-lg border border-rose-500/60 bg-rose-950/60 px-3 py-2 text-xs font-semibold text-rose-200">
+          {errorMsg}
+        </div>
+      )}
+
       <form onSubmit={handleSubmit} className="space-y-3.5">
         <div>
           <label className="mb-1.5 block text-xs font-bold text-[#f0cf65]">
-            Client Phone Number (for Pesapal & WhatsApp confirmation)
+            Client Full Name
+          </label>
+          <input
+            type="text"
+            value={name}
+            onChange={(e) => setName(e.target.value)}
+            placeholder="Your full name"
+            className="w-full min-h-[44px] rounded-lg border border-[#6a0dad]/60 bg-[#08070c] px-3 py-2.5 text-sm text-white placeholder-white/40 focus:border-[#d4af37] focus:outline-none"
+          />
+        </div>
+        <div>
+          <label className="mb-1.5 block text-xs font-bold text-[#f0cf65]">
+            Client Phone Number (for Pesapal &amp; WhatsApp confirmation)
           </label>
           <input
             type="tel"
@@ -217,10 +520,20 @@ export const PesapalModal: React.FC<PesapalModalProps> = ({
         </div>
         <button
           type="submit"
-          className="mt-2 flex min-h-[46px] w-full items-center justify-center gap-2 rounded-lg bg-gradient-to-br from-[#d4af37] to-[#b58d1e] px-4 py-2.5 text-sm font-extrabold text-black transition-transform active:scale-[0.98]"
+          disabled={isSubmitting}
+          className="mt-2 flex min-h-[46px] w-full items-center justify-center gap-2 rounded-lg bg-gradient-to-br from-[#d4af37] to-[#b58d1e] px-4 py-2.5 text-sm font-black uppercase tracking-wide text-black transition-transform active:scale-[0.98] disabled:opacity-65"
         >
-          <ShieldCheck className="h-4 w-4" />
-          <span>Complete Pesapal Payment</span>
+          {isSubmitting ? (
+            <>
+              <Loader2 className="h-4 w-4 animate-spin" />
+              <span>Redirecting to Pesapal...</span>
+            </>
+          ) : (
+            <>
+              <ShieldCheck className="h-4 w-4" />
+              <span>PAY / BOOK NOW</span>
+            </>
+          )}
         </button>
       </form>
 
@@ -262,6 +575,215 @@ export const PesapalModal: React.FC<PesapalModalProps> = ({
         )}
       </div>
     </ModalShell>
+  );
+};
+
+interface PaymentSuccessPageProps {
+  onPaymentCompleted: (
+    orderId: string,
+    workerData: WorkerStatusResponse,
+    savedOrder: PendingPesapalOrder | null
+  ) => { expiry: number; planName: string; amount: number; name: string; phone: string; email: string };
+  onReturnHome: (openPlans?: boolean) => void;
+}
+
+export const PaymentSuccessPage: React.FC<PaymentSuccessPageProps> = ({
+  onPaymentCompleted,
+  onReturnHome,
+}) => {
+  const [phase, setPhase] = useState<'loading' | 'completed' | 'failed'>('loading');
+  const [orderId, setOrderId] = useState('');
+  const [confirmation, setConfirmation] = useState<{
+    expiry: number;
+    planName: string;
+    amount: number;
+    name: string;
+    phone: string;
+    email: string;
+  } | null>(null);
+  const [errorDetail, setErrorDetail] = useState('');
+  const verifiedOnceRef = useRef(false);
+
+  useEffect(() => {
+    if (verifiedOnceRef.current) return;
+    verifiedOnceRef.current = true;
+
+    const params = new URLSearchParams(window.location.search);
+    const savedRaw = localStorage.getItem(PENDING_PESAPAL_ORDER_KEY);
+    let savedOrder: PendingPesapalOrder | null = null;
+    if (savedRaw) {
+      try {
+        savedOrder = JSON.parse(savedRaw) as PendingPesapalOrder;
+      } catch {
+        savedOrder = null;
+      }
+    }
+
+    const urlOrderId =
+      params.get('orderId') ||
+      params.get('OrderTrackingId') ||
+      params.get('orderTrackingId') ||
+      params.get('trackingId') ||
+      savedOrder?.orderId ||
+      '';
+
+    setOrderId(urlOrderId);
+
+    if (!urlOrderId) {
+      setErrorDetail('Missing orderId in URL.');
+      setPhase('failed');
+      return;
+    }
+
+    fetch(`${PESAPAL_WORKER_URL}?orderId=${encodeURIComponent(urlOrderId)}`)
+      .then(async (res) => {
+        const data: WorkerStatusResponse = await res.json().catch(() => ({}));
+        if (!res.ok) {
+          throw new Error(data?.error || data?.message || 'Verification failed.');
+        }
+        const statusStr = String(
+          data.status || data.payment_status_description || data.payment_status || ''
+        )
+          .trim()
+          .toUpperCase();
+
+        if (statusStr === 'COMPLETED') {
+          const confirmed = onPaymentCompleted(urlOrderId, data, savedOrder);
+          setConfirmation(confirmed);
+          setPhase('completed');
+        } else {
+          setErrorDetail(data?.message || (statusStr ? `Payment status: ${statusStr}` : ''));
+          setPhase('failed');
+        }
+      })
+      .catch((err) => {
+        setErrorDetail(err instanceof Error ? err.message : 'Unable to verify payment.');
+        setPhase('failed');
+      });
+  }, [onPaymentCompleted]);
+
+  const whatsappSupportHref = `https://wa.me/${WHATSAPP_ADMIN_PHONE}?text=${encodeURIComponent(
+    `Hello VJ EMMA, my Pesapal Order ID is ${orderId || 'N/A'}. Please assist with my payment confirmation.`
+  )}`;
+
+  return (
+    <div className="mx-auto max-w-[560px] px-4 py-10">
+      <div className="rounded-2xl border-2 border-[#d4af37]/70 bg-[#111018] p-6 shadow-2xl">
+        {phase === 'loading' && (
+          <div className="flex flex-col items-center gap-3 py-6 text-center">
+            <Loader2 className="h-10 w-10 animate-spin text-[#d4af37]" />
+            <h1 className="font-display text-lg font-bold text-[#f0cf65]">
+              Verifying Pesapal Payment...
+            </h1>
+            <p className="text-xs text-white/75">
+              Checking payment status for order {orderId || '...'}
+            </p>
+          </div>
+        )}
+
+        {phase === 'completed' && (
+          <div className="space-y-4">
+            <div className="flex flex-col items-center gap-2 text-center">
+              <CheckCircle2 className="h-12 w-12 text-emerald-400" />
+              <h1 className="font-display text-xl font-extrabold text-[#f0cf65]">
+                Payment Successful - Thank you VJ Emma
+              </h1>
+              <p className="text-xs text-emerald-300 font-semibold">
+                Your subscription is now active for watching &amp; downloading.
+              </p>
+            </div>
+
+            <div className="rounded-xl border border-[#6a0dad]/60 bg-[#08070d] p-4 space-y-2 text-xs">
+              <div className="font-bold uppercase tracking-wider text-[#d4af37]">
+                Download / Booking Confirmation
+              </div>
+              <div className="flex justify-between gap-2 border-b border-white/10 pb-1.5">
+                <span className="text-white/70">Order ID</span>
+                <span className="font-bold text-white break-all text-right">{orderId}</span>
+              </div>
+              {confirmation && (
+                <>
+                  <div className="flex justify-between gap-2 border-b border-white/10 pb-1.5">
+                    <span className="text-white/70">Customer</span>
+                    <span className="font-bold text-white text-right">{confirmation.name || confirmation.phone}</span>
+                  </div>
+                  <div className="flex justify-between gap-2 border-b border-white/10 pb-1.5">
+                    <span className="text-white/70">Phone / Email</span>
+                    <span className="font-semibold text-white/90 text-right">
+                      {confirmation.phone} {confirmation.email ? `· ${confirmation.email}` : ''}
+                    </span>
+                  </div>
+                  <div className="flex justify-between gap-2 border-b border-white/10 pb-1.5">
+                    <span className="text-white/70">Plan</span>
+                    <span className="font-bold text-[#f0cf65] text-right">{confirmation.planName}</span>
+                  </div>
+                  <div className="flex justify-between gap-2 border-b border-white/10 pb-1.5">
+                    <span className="text-white/70">Amount Paid</span>
+                    <span className="font-black text-white tabular-nums text-right">
+                      UGX {Number(confirmation.amount).toLocaleString()}
+                    </span>
+                  </div>
+                  <div className="flex justify-between gap-2">
+                    <span className="text-white/70">Access Valid Until</span>
+                    <span className="font-bold text-emerald-400 text-right">
+                      {new Date(confirmation.expiry).toLocaleString()}
+                    </span>
+                  </div>
+                </>
+              )}
+            </div>
+
+            <button
+              type="button"
+              onClick={() => onReturnHome(false)}
+              className="flex min-h-[46px] w-full items-center justify-center rounded-lg bg-gradient-to-br from-[#d4af37] to-[#b58d1e] px-4 py-2.5 text-sm font-extrabold text-black"
+            >
+              Watch &amp; Download Now
+            </button>
+          </div>
+        )}
+
+        {phase === 'failed' && (
+          <div className="space-y-4 text-center">
+            <div className="flex flex-col items-center gap-2">
+              <AlertTriangle className="h-12 w-12 text-rose-400" />
+              <h1 className="font-display text-xl font-extrabold text-rose-300">
+                Payment Failed, Try Again
+              </h1>
+              {errorDetail && (
+                <p className="text-xs text-white/75">{errorDetail}</p>
+              )}
+            </div>
+
+            <div className="flex flex-col gap-2.5 pt-2">
+              <button
+                type="button"
+                onClick={() => onReturnHome(true)}
+                className="flex min-h-[46px] w-full items-center justify-center rounded-lg bg-gradient-to-br from-[#d4af37] to-[#b58d1e] px-4 py-2.5 text-sm font-extrabold text-black"
+              >
+                Try Again
+              </button>
+              <a
+                href={whatsappSupportHref}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="flex min-h-[44px] w-full items-center justify-center gap-2 rounded-lg border border-emerald-400/70 bg-emerald-700 px-4 py-2 text-xs font-extrabold text-white"
+              >
+                <MessageCircle className="h-4 w-4" />
+                <span>Need Help? Pay Manually on WhatsApp ({WHATSAPP_DISPLAY_PHONE})</span>
+              </a>
+              <button
+                type="button"
+                onClick={() => onReturnHome(false)}
+                className="min-h-[40px] rounded-lg border border-white/15 bg-white/5 px-4 py-2 text-xs font-bold text-white/80"
+              >
+                Back to Home
+              </button>
+            </div>
+          </div>
+        )}
+      </div>
+    </div>
   );
 };
 
@@ -393,6 +915,22 @@ export const PlayerModal: React.FC<PlayerModalProps> = ({
 
   if (!media) return null;
 
+  if (!canDownload) {
+    return (
+      <ModalShell open={Boolean(media)} onClose={handleClose} title={media.title} maxWidthClass="max-w-[520px]">
+        <div className="flex flex-col items-center gap-3 rounded-xl border border-[#d4af37]/60 bg-[#08070d] p-6 text-center">
+          <Lock className="h-10 w-10 text-[#d4af37]" />
+          <div className="font-display text-base font-bold text-[#f0cf65]">
+            Subscription Payment Required
+          </div>
+          <p className="text-xs leading-relaxed text-white/80">
+            Watching and downloading are locked until your payment is completed.
+          </p>
+        </div>
+      </ModalShell>
+    );
+  }
+
   return (
     <ModalShell open={Boolean(media)} onClose={handleClose} title={media.title} maxWidthClass="max-w-[760px]">
       <div
@@ -429,6 +967,9 @@ export const PlayerModal: React.FC<PlayerModalProps> = ({
             controls
             controlsList={!canDownload ? 'nodownload' : undefined}
             playsInline
+            onContextMenu={(e) => {
+              if (!canDownload) e.preventDefault();
+            }}
             onPlay={() => setIsPlaying(true)}
             onPause={() => setIsPlaying(false)}
             className={enlarged ? 'h-full max-h-[calc(100vh-68px)] w-full bg-black' : 'block max-h-[56vh] w-full bg-black'}

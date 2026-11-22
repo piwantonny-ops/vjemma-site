@@ -51,6 +51,9 @@ export interface Movie {
 export interface Banner {
   id: string;
   image: string;
+  title?: string;
+  subText?: string;
+  buttonText?: string;
 }
 
 export interface Season {
@@ -58,6 +61,7 @@ export interface Season {
   seriesTitle: string;
   seasonNumber: string;
   poster: string;
+  label?: string;
 }
 
 export interface Episode {
@@ -91,6 +95,7 @@ export interface CommentItem {
 
 export interface WalletTransaction {
   id: string;
+  name?: string;
   phone: string;
   email: string;
   plan: string;
@@ -102,6 +107,7 @@ export interface WalletTransaction {
 
 export interface UserAccount {
   id: string;
+  name?: string;
   phone: string;
   email: string;
   password: string;
@@ -118,6 +124,7 @@ export interface UserAccount {
 
 export interface SessionUser {
   id?: string;
+  name?: string;
   phone: string;
   email: string;
   role: 'admin' | 'customer';
@@ -140,6 +147,7 @@ export interface AppSettings {
   youtubeUrl: string;
   facebookUrl: string;
   tiktokUrl: string;
+  genreLine?: string;
   movieTags: string[];
   paymentPlans: PaymentPlan[];
   priceWeekly: number;

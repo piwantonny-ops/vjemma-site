@@ -4,8 +4,27 @@ import type { AppSettings, AppState } from './types';
 export const BRAND_LOGO_URL = '/assets/aistudio/logo_c90328c3.jpg';
 export const WHATSAPP_DISPLAY_PHONE = '0776043203';
 export const WHATSAPP_ADMIN_PHONE = '256776043203';
+export const LOCKED_ADMIN_EMAIL = 'piwantonny@gmail.com';
+export const DEFAULT_GENRE_LINE =
+  'Indian, Asian, Christian, Comedy, Action, Drama, Love, Family, Thriller, Horror, Documentary, Kids, VIP Movies, Lango Movies, Acholi Movies, Alur Movies';
+export const LIVE_SYNC_CHANNEL = 'vj_emma_live_sync';
 
-const DB_KEY = 'vj_emma_truelight_v2';
+export function parseGenreLine(line?: string): string[] {
+  const source = line !== undefined ? line : DEFAULT_GENRE_LINE;
+  const result: string[] = [];
+  const seen = new Set<string>();
+  for (const part of source.split(',')) {
+    const clean = part.trim();
+    if (!clean) continue;
+    const key = clean.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    result.push(clean);
+  }
+  return result;
+}
+
+export const DB_KEY = 'vj_emma_truelight_v2';
 const IDB_NAME = 'vj_emma_media_store';
 const IDB_STORE = 'files';
 const objectUrlCache: Record<string, string> = {};
@@ -117,6 +136,7 @@ export function useResolvedMedia(ref?: string): string {
 
 export function createDefaultState(): AppState {
   const now = 1795302000000;
+  const parsedGenres = parseGenreLine(DEFAULT_GENRE_LINE);
   return {
     wallet: 0,
     walletTransactions: [],
@@ -128,10 +148,10 @@ export function createDefaultState(): AppState {
         title: 'True Light Over Acholi',
         year: '2026',
         rating: '4.9',
-        category: 'Christian Movies',
-        genre: 'Faith',
+        category: 'Christian',
+        genre: 'Christian',
         actors: 'Okello Moses, Akello Grace, Opiyo Daniel',
-        label: 'TRENDING',
+        label: '',
         description: 'An inspiring Luo-translated faith story of hope, courage, and forgiveness.',
         poster: '/src/assets/images/poster_true_light_1795302097420.jpg',
         video: '',
@@ -143,9 +163,9 @@ export function createDefaultState(): AppState {
         year: '2026',
         rating: '4.8',
         category: 'Action',
-        genre: 'Thriller',
+        genre: 'Action',
         actors: 'Odongo Victor, Aber Faith, Kizza Samuel',
-        label: 'HOT',
+        label: '',
         description: 'High-stakes undercover action translated in Luo by VJ Emma.',
         poster: '/src/assets/images/poster_night_strike_1795302098055.jpg',
         video: '',
@@ -159,7 +179,7 @@ export function createDefaultState(): AppState {
         category: 'Drama',
         genre: 'Drama',
         actors: 'Komakech Brian, Apiyo Esther, Oloya Peter',
-        label: 'NEW RELEASE',
+        label: '',
         description: 'A royal saga of leadership, betrayal, and honour brought home in Luo.',
         poster: '/src/assets/images/poster_golden_throne_1795302098341.jpg',
         video: '',
@@ -170,10 +190,10 @@ export function createDefaultState(): AppState {
         title: 'Promise By The Nile',
         year: '2026',
         rating: '4.7',
-        category: 'Luo Movies',
-        genre: 'Drama',
+        category: 'Acholi Movies',
+        genre: 'Acholi Movies',
         actors: 'Onyango Denis, Adoch Mercy, Latim Ronald',
-        label: 'TOP 10',
+        label: '',
         description: 'A heartfelt family journey along the banks of the Nile in Luo.',
         poster: '/src/assets/images/poster_nile_promise_1795302098552.jpg',
         video: '',
@@ -184,21 +204,11 @@ export function createDefaultState(): AppState {
     seasons: [],
     episodes: [],
     liveTvChannels: [],
-    categories: [
-      { id: 'cat_christian', name: 'Christian Movies' },
-      { id: 'cat_action', name: 'Action' },
-      { id: 'cat_drama', name: 'Drama' },
-      { id: 'cat_luo', name: 'Luo Movies' },
-    ],
-    genres: [
-      { id: 'gen_faith', name: 'Faith' },
-      { id: 'gen_action', name: 'Action' },
-      { id: 'gen_drama', name: 'Drama' },
-      { id: 'gen_thriller', name: 'Thriller' },
-    ],
+    categories: parsedGenres.map((name, idx) => ({ id: `cat_${idx}`, name })),
+    genres: parsedGenres.map((name, idx) => ({ id: `gen_${idx}`, name })),
     likes: {},
     comments: {},
-    adminEmail: '',
+    adminEmail: LOCKED_ADMIN_EMAIL,
     adminPassword: 'vjemma123',
     currentUser: null,
     isAdminLoggedIn: false,
@@ -215,17 +225,8 @@ export function createDefaultState(): AppState {
       youtubeUrl: '',
       facebookUrl: '',
       tiktokUrl: '',
-      movieTags: [
-        'TRENDING',
-        'NEW RELEASE',
-        'LUO DUBBED',
-        'HOT',
-        'TOP 10',
-        'UPCOMING',
-        'CLASSIC',
-        'CHRISTIAN',
-        'FEATURED',
-      ],
+      genreLine: DEFAULT_GENRE_LINE,
+      movieTags: ['VIP'],
       paymentPlans: [
         { id: 'plan_weekly', name: 'Weekly', price: 5000, days: 7 },
         { id: 'plan_monthly', name: 'Monthly', price: 15000, days: 30 },
@@ -254,18 +255,14 @@ export function loadState(): AppState {
     const normalizedR2 = [0, 1, 2, 3, 4].map(
       (idx) => savedR2[idx] ?? (idx === 0 ? parsed.settings?.r2Endpoint || '' : '')
     );
-    const savedTags = Array.isArray(parsed.settings?.movieTags)
-      ? parsed.settings!.movieTags.map((t) => String(t).trim()).filter(Boolean)
-      : [];
-    const isOldDefaultTags =
-      savedTags.length === 5 &&
-      savedTags.includes('VIP') &&
-      savedTags.includes('TRENDING') &&
-      savedTags.includes('UPCOMING') &&
-      savedTags.includes('HOT') &&
-      savedTags.includes('TOP 10');
-    const normalizedTags =
-      savedTags.length > 0 && !isOldDefaultTags ? savedTags : defaults.settings.movieTags;
+
+    const genreLine =
+      typeof parsed.settings?.genreLine === 'string' && parsed.settings.genreLine.trim().length > 0
+        ? parsed.settings.genreLine
+        : DEFAULT_GENRE_LINE;
+    const parsedGenreNames = parseGenreLine(genreLine);
+    const syncedGenres = parsedGenreNames.map((name, idx) => ({ id: `gen_${idx}`, name }));
+    const syncedCategories = parsedGenreNames.map((name, idx) => ({ id: `cat_${idx}`, name }));
 
     const rawPlans = Array.isArray(parsed.settings?.paymentPlans)
       ? parsed.settings!.paymentPlans
@@ -306,10 +303,22 @@ export function loadState(): AppState {
         ? defaults.adminPassword
         : parsed.adminPassword;
 
+    const legacyAutoLabels = new Set(['TRENDING', 'HOT', 'NEW RELEASE', 'TOP 10']);
+    const cleanedMovies = Array.isArray(parsed.movies)
+      ? parsed.movies.map((m) =>
+          m.id.startsWith('mov_sample_') && legacyAutoLabels.has((m.label || '').trim().toUpperCase())
+            ? { ...m, label: '' }
+            : m
+        )
+      : defaults.movies;
+
     return {
       ...defaults,
       ...parsed,
-      adminEmail: typeof parsed.adminEmail === 'string' ? parsed.adminEmail : defaults.adminEmail,
+      movies: cleanedMovies,
+      categories: syncedCategories,
+      genres: syncedGenres,
+      adminEmail: LOCKED_ADMIN_EMAIL,
       adminPassword: migratedPassword,
       walletTransactions: Array.isArray(parsed.walletTransactions)
         ? parsed.walletTransactions
@@ -318,8 +327,9 @@ export function loadState(): AppState {
       settings: {
         ...defaults.settings,
         ...(parsed.settings || {}),
+        genreLine,
         r2Links: normalizedR2,
-        movieTags: normalizedTags,
+        movieTags: ['VIP'],
         paymentPlans: normalizedPlans,
       },
     };
@@ -331,6 +341,11 @@ export function loadState(): AppState {
 export function saveState(state: AppState): void {
   try {
     localStorage.setItem(DB_KEY, JSON.stringify(state));
+    if (typeof window !== 'undefined' && 'BroadcastChannel' in window) {
+      const ch = new BroadcastChannel(LIVE_SYNC_CHANNEL);
+      ch.postMessage({ type: 'state-updated', at: Date.now() });
+      ch.close();
+    }
   } catch (err) {
     console.warn('Storage save issue', err);
   }

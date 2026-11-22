@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react';
-import { ChevronLeft, ChevronRight, Film, Heart, MessageCircle, Play, Radio, Share2 } from 'lucide-react';
-import { getSocialPlatformItems, normalizeSocialUrl, useResolvedMedia } from '../storage';
+import { ChevronLeft, ChevronRight, Film, Heart, Lock, MessageCircle, Play, Radio, Share2 } from 'lucide-react';
+import { getSocialPlatformItems, normalizeSocialUrl, parseGenreLine, useResolvedMedia } from '../storage';
 import { PWAInstallButton } from './PWAInstallButton';
 import type {
   AppSettings,
@@ -10,12 +10,11 @@ import type {
   InfoModalType,
   LiveTvChannel,
   Movie,
-  PendingPlan,
   Season,
 } from '../types';
 
 /* --------------------------------------------------------------------------
-   BANNER CAROUSEL - CLEAN IMAGE ONLY, MAX 5, 5-SECOND AUTO-ROTATE
+   BANNER CAROUSEL - SMOOTH SLIDE/FADE FLIP EVERY 5 SECONDS + BANNER TEXT
 -------------------------------------------------------------------------- */
 const BannerSlideImage: React.FC<{ imageRef: string }> = ({ imageRef }) => {
   const src = useResolvedMedia(imageRef);
@@ -34,7 +33,10 @@ const BannerSlideImage: React.FC<{ imageRef: string }> = ({ imageRef }) => {
   );
 };
 
-const BannerCarousel: React.FC<{ banners: Banner[] }> = ({ banners }) => {
+const BannerCarousel: React.FC<{
+  banners: Banner[];
+  onBannerAction?: () => void;
+}> = ({ banners, onBannerAction }) => {
   const activeBanners = banners.slice(0, 5);
   const [currentIdx, setCurrentIdx] = useState(0);
 
@@ -63,15 +65,56 @@ const BannerCarousel: React.FC<{ banners: Banner[] }> = ({ banners }) => {
         <div className="h-full w-full bg-[radial-gradient(circle_at_center,rgba(106,13,173,0.38)_0%,#050507_78%)]" />
       ) : (
         <>
-          <div
-            className="flex h-full w-full transition-transform duration-500 ease-out"
-            style={{ transform: `translateX(-${currentIdx * 100}%)` }}
-          >
-            {activeBanners.map((b) => (
-              <div key={b.id} className="h-full min-w-full bg-[#0a0810]">
-                <BannerSlideImage imageRef={b.image} />
-              </div>
-            ))}
+          <div className="relative h-full w-full">
+            {activeBanners.map((b, idx) => {
+              const isActive = idx === currentIdx;
+              const isPrev =
+                idx === (currentIdx - 1 + activeBanners.length) % activeBanners.length;
+              const hasCopy = Boolean(
+                b.title?.trim() || b.subText?.trim() || b.buttonText?.trim()
+              );
+              return (
+                <div
+                  key={b.id}
+                  aria-hidden={!isActive}
+                  className={`absolute inset-0 h-full w-full bg-[#0a0810] transition-all duration-700 ease-in-out ${
+                    isActive
+                      ? 'z-10 translate-x-0 scale-100 opacity-100'
+                      : isPrev
+                        ? 'pointer-events-none z-0 -translate-x-8 scale-[1.01] opacity-0'
+                        : 'pointer-events-none z-0 translate-x-8 scale-[1.01] opacity-0'
+                  }`}
+                >
+                  <BannerSlideImage imageRef={b.image} />
+
+                  {hasCopy && (
+                    <div className="absolute inset-0 flex flex-col justify-end bg-gradient-to-t from-black/90 via-black/40 to-transparent p-4 sm:p-6">
+                      <div className="max-w-xl">
+                        {b.title?.trim() && (
+                          <h2 className="font-display text-base font-extrabold leading-tight text-white drop-shadow sm:text-2xl">
+                            {b.title.trim()}
+                          </h2>
+                        )}
+                        {b.subText?.trim() && (
+                          <p className="mt-1 text-xs font-medium text-[#e6dcf5] line-clamp-2 sm:text-sm">
+                            {b.subText.trim()}
+                          </p>
+                        )}
+                        {b.buttonText?.trim() && (
+                          <button
+                            type="button"
+                            onClick={onBannerAction}
+                            className="mt-2.5 inline-flex min-h-[38px] items-center rounded-lg bg-gradient-to-r from-[#d4af37] via-[#f0cf65] to-[#d4af37] px-4 py-1.5 text-xs font-extrabold text-black shadow transition-transform active:scale-95"
+                          >
+                            {b.buttonText.trim()}
+                          </button>
+                        )}
+                      </div>
+                    </div>
+                  )}
+                </div>
+              );
+            })}
           </div>
 
           {activeBanners.length > 1 && (
@@ -80,7 +123,7 @@ const BannerCarousel: React.FC<{ banners: Banner[] }> = ({ banners }) => {
                 type="button"
                 onClick={() => move(-1)}
                 aria-label="Previous banner"
-                className="absolute left-3 top-1/2 z-10 flex h-11 w-11 -translate-y-1/2 items-center justify-center rounded-full border border-[#d4af37] bg-[#4a077a]/80 text-[#d4af37] hover:bg-[#6a0dad] transition-colors"
+                className="absolute left-3 top-1/2 z-20 flex h-11 w-11 -translate-y-1/2 items-center justify-center rounded-full border border-[#d4af37] bg-[#4a077a]/80 text-[#d4af37] hover:bg-[#6a0dad] transition-colors"
               >
                 <ChevronLeft className="h-5 w-5" />
               </button>
@@ -88,11 +131,11 @@ const BannerCarousel: React.FC<{ banners: Banner[] }> = ({ banners }) => {
                 type="button"
                 onClick={() => move(1)}
                 aria-label="Next banner"
-                className="absolute right-3 top-1/2 z-10 flex h-11 w-11 -translate-y-1/2 items-center justify-center rounded-full border border-[#d4af37] bg-[#4a077a]/80 text-[#d4af37] hover:bg-[#6a0dad] transition-colors"
+                className="absolute right-3 top-1/2 z-20 flex h-11 w-11 -translate-y-1/2 items-center justify-center rounded-full border border-[#d4af37] bg-[#4a077a]/80 text-[#d4af37] hover:bg-[#6a0dad] transition-colors"
               >
                 <ChevronRight className="h-5 w-5" />
               </button>
-              <div className="absolute bottom-3 left-1/2 z-10 flex -translate-x-1/2 gap-2">
+              <div className="absolute bottom-3 left-1/2 z-20 flex -translate-x-1/2 gap-2">
                 {activeBanners.map((b, idx) => (
                   <button
                     key={b.id}
@@ -190,6 +233,7 @@ interface MovieCardProps {
   isLiked: boolean;
   commentsCount: number;
   isAdmin: boolean;
+  isSubscribed: boolean;
   onWatch: (id: string) => void;
   onLike: (id: string) => void;
   onShare: (id: string) => void;
@@ -205,6 +249,7 @@ const MovieCard: React.FC<MovieCardProps> = ({
   isLiked,
   commentsCount,
   isAdmin,
+  isSubscribed,
   onWatch,
   onLike,
   onShare,
@@ -221,11 +266,12 @@ const MovieCard: React.FC<MovieCardProps> = ({
   const showActors = settings.showPosterActors !== false;
   const showDescription = settings.showPosterDescription !== false;
 
-  const metaParts = [
-    showYear ? movie.year : '',
-    movie.category,
-    movie.genre,
-  ].filter(Boolean);
+  const tagsList = (movie.label || '')
+    .split(',')
+    .map((t) => t.trim())
+    .filter(Boolean);
+  const isVipMovie = tagsList.some((t) => t.toUpperCase() === 'VIP');
+  const isVipLocked = isVipMovie && !isSubscribed && !isAdmin;
 
   return (
     <article className="group flex flex-col overflow-hidden rounded-xl border border-[#6a0dad]/60 bg-[#110e1a] shadow-lg transition-colors hover:border-[#d4af37]">
@@ -244,23 +290,26 @@ const MovieCard: React.FC<MovieCardProps> = ({
           </div>
         )}
 
-        {/* Top Scrim + Poster Tag Badges & Rating */}
+        {/* Top Scrim + Optional Poster Label (only shown if set in Edit Page) & Rating */}
         <div className="pointer-events-none absolute inset-x-0 top-0 h-16 bg-gradient-to-b from-black/80 to-transparent" />
-        {showLabel && movie.label && (
+        {showLabel && tagsList.length > 0 && (
           <div className="absolute left-2 top-2 flex max-w-[72%] flex-wrap gap-1">
-            {movie.label
-              .split(',')
-              .map((t) => t.trim())
-              .filter(Boolean)
-              .slice(0, 3)
-              .map((tag) => (
+            {tagsList.slice(0, 3).map((tag) => {
+              const isVipTag = tag.toUpperCase() === 'VIP';
+              return (
                 <span
                   key={tag}
-                  className="rounded border border-[#d4af37] bg-[#6a0dad]/95 px-1.5 py-0.5 text-[9px] font-extrabold uppercase tracking-wider text-[#f0cf65] shadow"
+                  className={
+                    isVipTag
+                      ? 'inline-flex items-center gap-0.5 rounded border border-[#f0cf65] bg-gradient-to-r from-[#d4af37] to-[#f0cf65] px-1.5 py-0.5 text-[9px] font-black uppercase tracking-wider text-black shadow'
+                      : 'rounded border border-[#d4af37] bg-[#6a0dad]/95 px-1.5 py-0.5 text-[9px] font-extrabold uppercase tracking-wider text-[#f0cf65] shadow'
+                  }
                 >
-                  {tag}
+                  {isVipTag && isVipLocked && <Lock className="h-2.5 w-2.5" />}
+                  <span>{tag}</span>
                 </span>
-              ))}
+              );
+            })}
           </div>
         )}
         {showRating && movie.rating && (
@@ -288,9 +337,9 @@ const MovieCard: React.FC<MovieCardProps> = ({
         <h3 className="font-display text-sm font-semibold leading-snug text-white line-clamp-2">
           {movie.title}
         </h3>
-        <div className="text-[11px] font-medium text-[#f0cf65]">
-          {metaParts.join(' · ') || 'Luo Translated'}
-        </div>
+        {showYear && movie.year && (
+          <div className="text-[11px] font-medium text-[#f0cf65] tabular-nums">{movie.year}</div>
+        )}
 
         {showActors && movie.actors && (
           <p className="text-[11px] font-normal text-[#e0d8ef] line-clamp-1">
@@ -309,8 +358,17 @@ const MovieCard: React.FC<MovieCardProps> = ({
           onClick={() => onWatch(movie.id)}
           className="mt-auto flex min-h-[44px] w-full items-center justify-center gap-1.5 rounded-lg bg-gradient-to-r from-[#d4af37] via-[#f0cf65] to-[#d4af37] px-3 py-2 text-xs font-bold tracking-normal text-black shadow transition-transform active:scale-[0.98]"
         >
-          <Play className="h-3.5 w-3.5 fill-current" />
-          <span>Watch Now</span>
+          {isVipLocked ? (
+            <>
+              <Lock className="h-3.5 w-3.5" />
+              <span>VIP · Pay to Watch</span>
+            </>
+          ) : (
+            <>
+              <Play className="h-3.5 w-3.5 fill-current" />
+              <span>Watch Now</span>
+            </>
+          )}
         </button>
 
         {isAdmin && (
@@ -340,6 +398,7 @@ interface MoviesGridProps {
   movies: Movie[];
   emptyText: string;
   state: AppState;
+  isSubscribed?: boolean;
   onWatch: (id: string) => void;
   onLike: (id: string) => void;
   onShare: (id: string) => void;
@@ -352,6 +411,7 @@ const MoviesGrid: React.FC<MoviesGridProps> = ({
   movies,
   emptyText,
   state,
+  isSubscribed = false,
   onWatch,
   onLike,
   onShare,
@@ -381,6 +441,7 @@ const MoviesGrid: React.FC<MoviesGridProps> = ({
             isLiked={likeInfo.liked}
             commentsCount={commentsCount}
             isAdmin={state.isAdminLoggedIn}
+            isSubscribed={isSubscribed}
             onWatch={onWatch}
             onLike={onLike}
             onShare={onShare}
@@ -514,11 +575,13 @@ const SiteFooter: React.FC<{
 -------------------------------------------------------------------------- */
 interface HomeViewProps {
   state: AppState;
+  isSubscribed?: boolean;
   onWatchMovie: (id: string) => void;
   onLikeMovie: (id: string) => void;
   onShareMovie: (id: string) => void;
   onOpenComments: (id: string) => void;
   onOpenInfo: (type: InfoModalType) => void;
+  onBannerAction?: () => void;
   onNotify?: (msg: string) => void;
   onAdminEditMovie?: (id: string) => void;
   onAdminDeleteMovie?: (id: string) => void;
@@ -526,11 +589,13 @@ interface HomeViewProps {
 
 export const HomeView: React.FC<HomeViewProps> = ({
   state,
+  isSubscribed = false,
   onWatchMovie,
   onLikeMovie,
   onShareMovie,
   onOpenComments,
   onOpenInfo,
+  onBannerAction,
   onNotify,
   onAdminEditMovie,
   onAdminDeleteMovie,
@@ -548,14 +613,11 @@ export const HomeView: React.FC<HomeViewProps> = ({
 
   return (
     <div>
-      <BannerCarousel banners={state.banners} />
+      <BannerCarousel banners={state.banners} onBannerAction={onBannerAction} />
 
       <div className="border-b border-[#d4af37]/40 bg-gradient-to-r from-[#4a077a] via-[#6a0dad] to-[#4a077a] px-4 py-4 text-center">
-        <p className="font-display text-sm font-semibold tracking-normal text-[#f0cf65] text-balance sm:text-base">
-          WE BRING THE WORLD HOME IN LUO · Watch Movies In Your Language...
-        </p>
-        <p className="mt-1 text-xs font-medium text-white/95">
-          Long lasting, for our local people
+        <p className="font-display text-sm font-bold tracking-wide text-[#f0cf65] text-balance sm:text-base">
+          VJ EMMA TRUE LIGHT PRODUCTION · THE PRIDE OF LUO PEOPLE
         </p>
       </div>
 
@@ -569,6 +631,7 @@ export const HomeView: React.FC<HomeViewProps> = ({
           movies={trendingMovies}
           emptyText="No movies available yet. Please check back soon."
           state={state}
+          isSubscribed={isSubscribed}
           onWatch={onWatchMovie}
           onLike={onLikeMovie}
           onShare={onShareMovie}
@@ -586,6 +649,7 @@ export const HomeView: React.FC<HomeViewProps> = ({
           movies={christianMovies}
           emptyText="No Christian movies available yet."
           state={state}
+          isSubscribed={isSubscribed}
           onWatch={onWatchMovie}
           onLike={onLikeMovie}
           onShare={onShareMovie}
@@ -595,16 +659,21 @@ export const HomeView: React.FC<HomeViewProps> = ({
         />
       </div>
 
-      <SiteFooter settings={state.settings} onOpenInfo={onOpenInfo} onNotify={onNotify} />
+      <SiteFooter
+        settings={state.settings}
+        onOpenInfo={onOpenInfo}
+        onNotify={onNotify}
+      />
     </div>
   );
 };
 
 /* --------------------------------------------------------------------------
-   2. MOVIES VIEW (FILTER BY CATEGORIES, GENRES, AND LABELS)
+   2. MOVIES VIEW (ONE SINGLE HORIZONTAL LINE GENRE / CATEGORY BAR)
 -------------------------------------------------------------------------- */
 interface MoviesViewProps {
   state: AppState;
+  isSubscribed?: boolean;
   onWatchMovie: (id: string) => void;
   onLikeMovie: (id: string) => void;
   onShareMovie: (id: string) => void;
@@ -617,6 +686,7 @@ interface MoviesViewProps {
 
 export const MoviesView: React.FC<MoviesViewProps> = ({
   state,
+  isSubscribed = false,
   onWatchMovie,
   onLikeMovie,
   onShareMovie,
@@ -626,43 +696,29 @@ export const MoviesView: React.FC<MoviesViewProps> = ({
   onAdminEditMovie,
   onAdminDeleteMovie,
 }) => {
-  const [selectedCategory, setSelectedCategory] = useState('ALL');
   const [selectedGenre, setSelectedGenre] = useState('ALL');
-  const [selectedLabel, setSelectedLabel] = useState('ALL');
 
-  const categoryOptions = ['ALL', ...state.categories.map((c) => c.name)];
-  const genreOptions = ['ALL', ...state.genres.map((g) => g.name)];
-  const configuredTags =
-    state.settings.movieTags && state.settings.movieTags.length > 0
-      ? state.settings.movieTags
-      : [
-          'TRENDING',
-          'NEW RELEASE',
-          'LUO DUBBED',
-          'HOT',
-          'TOP 10',
-          'UPCOMING',
-          'CLASSIC',
-          'CHRISTIAN',
-          'FEATURED',
-        ];
-  const labelOptions = ['ALL', ...configuredTags];
+  const parsedGenres = parseGenreLine(state.settings.genreLine);
+  const genreOptions = ['ALL', ...parsedGenres];
 
   const filteredMovies = [...state.movies].reverse().filter((m) => {
-    const matchCategory =
-      selectedCategory === 'ALL' ||
-      (m.category || '').toLowerCase() === selectedCategory.toLowerCase();
-    const matchGenre =
-      selectedGenre === 'ALL' ||
-      (m.genre || '').toLowerCase() === selectedGenre.toLowerCase();
-    const mTags = (m.label || '')
+    if (selectedGenre === 'ALL') return true;
+    const sel = selectedGenre.toLowerCase();
+    const g = (m.genre || '').toLowerCase();
+    const c = (m.category || '').toLowerCase();
+    const tags = (m.label || '')
       .split(',')
-      .map((t) => t.trim().toUpperCase())
+      .map((t) => t.trim().toLowerCase())
       .filter(Boolean);
-    const matchLabel =
-      selectedLabel === 'ALL' ||
-      mTags.includes(selectedLabel.toUpperCase());
-    return matchCategory && matchGenre && matchLabel;
+
+    if (g === sel || c === sel) return true;
+    if (sel === 'christian' && (c.includes('christian') || g.includes('christian') || g.includes('faith'))) {
+      return true;
+    }
+    if (sel === 'vip movies' && tags.includes('vip')) {
+      return true;
+    }
+    return false;
   });
 
   return (
@@ -672,66 +728,29 @@ export const MoviesView: React.FC<MoviesViewProps> = ({
           <h2 className="font-display text-lg font-semibold text-white">All Movies</h2>
         </div>
 
-        {/* Category Filter Buttons */}
-        <div className="mb-2.5 flex gap-2 overflow-x-auto pb-1">
-          {categoryOptions.map((cat) => (
+        {/* ONE SINGLE HORIZONTAL LINE OF GENRES / CATEGORIES */}
+        <div className="mb-4 flex flex-nowrap gap-2 overflow-x-auto pb-1">
+          {genreOptions.map((gen) => (
             <button
-              key={`cat-${cat}`}
+              key={`gen-${gen}`}
               type="button"
-              onClick={() => setSelectedCategory(cat)}
+              onClick={() => setSelectedGenre(gen)}
               className={`min-h-[40px] shrink-0 whitespace-nowrap rounded-lg border px-3.5 py-1.5 text-xs font-semibold transition-colors ${
-                selectedCategory === cat
+                selectedGenre === gen
                   ? 'border-[#d4af37] bg-[#d4af37] text-black'
                   : 'border-[#6a0dad] bg-[#140e22] text-white hover:bg-[#6a0dad]/40'
               }`}
             >
-              {cat}
-            </button>
-          ))}
-        </div>
-
-        {/* Genre Filter Buttons (shown when Genres exist) */}
-        {genreOptions.length > 1 && (
-          <div className="mb-2.5 flex gap-2 overflow-x-auto pb-1">
-            {genreOptions.map((gen) => (
-              <button
-                key={`gen-${gen}`}
-                type="button"
-                onClick={() => setSelectedGenre(gen)}
-                className={`min-h-[40px] shrink-0 whitespace-nowrap rounded-lg border px-3.5 py-1.5 text-xs font-semibold transition-colors ${
-                  selectedGenre === gen
-                    ? 'border-[#d4af37] bg-[#6a0dad] text-[#f0cf65]'
-                    : 'border-white/20 bg-[#110e1a] text-white/85 hover:border-[#6a0dad]'
-                }`}
-              >
-                {gen === 'ALL' ? 'All Genres' : gen}
-              </button>
-            ))}
-          </div>
-        )}
-
-        {/* Label Filter Buttons */}
-        <div className="mb-4 flex gap-2 overflow-x-auto pb-1">
-          {labelOptions.map((lbl) => (
-            <button
-              key={`lbl-${lbl}`}
-              type="button"
-              onClick={() => setSelectedLabel(lbl)}
-              className={`min-h-[40px] shrink-0 whitespace-nowrap rounded-lg border px-3 py-1.5 text-xs font-semibold transition-colors ${
-                selectedLabel === lbl
-                  ? 'border-[#d4af37] bg-[#6a0dad] text-white'
-                  : 'border-white/15 bg-[#0e0b16] text-white/80 hover:border-[#d4af37]/60'
-              }`}
-            >
-              {lbl === 'ALL' ? 'All Labels' : lbl}
+              {gen === 'ALL' ? 'All' : gen}
             </button>
           ))}
         </div>
 
         <MoviesGrid
           movies={filteredMovies}
-          emptyText="No movies found for the selected filter."
+          emptyText="No movies found for the selected genre."
           state={state}
+          isSubscribed={isSubscribed}
           onWatch={onWatchMovie}
           onLike={onLikeMovie}
           onShare={onShareMovie}
@@ -741,7 +760,11 @@ export const MoviesView: React.FC<MoviesViewProps> = ({
         />
       </div>
 
-      <SiteFooter settings={state.settings} onOpenInfo={onOpenInfo} onNotify={onNotify} />
+      <SiteFooter
+        settings={state.settings}
+        onOpenInfo={onOpenInfo}
+        onNotify={onNotify}
+      />
     </div>
   );
 };
@@ -825,9 +848,17 @@ export const SeriesView: React.FC<SeriesViewProps> = ({
                   <div className="flex flex-col gap-4 sm:flex-row">
                     <div className="relative aspect-[2/3] w-44 shrink-0 self-center overflow-hidden rounded-xl border border-[#d4af37]/60 bg-[#181228] sm:w-44 sm:self-start">
                       <SeasonPoster posterRef={s.poster} title={s.seriesTitle} />
-                      <span className="absolute left-2 top-2 rounded border border-[#d4af37] bg-[#6a0dad] px-2 py-0.5 text-[10px] font-extrabold uppercase tracking-wider text-[#f0cf65]">
-                        Season {s.seasonNumber}
-                      </span>
+                      {(s.label || '').trim() && (
+                        <span
+                          className={
+                            (s.label || '').trim().toUpperCase().includes('VIP')
+                              ? 'absolute left-2 top-2 inline-flex items-center gap-0.5 rounded border border-[#f0cf65] bg-gradient-to-r from-[#d4af37] to-[#f0cf65] px-1.5 py-0.5 text-[9px] font-black uppercase tracking-wider text-black shadow'
+                              : 'absolute left-2 top-2 rounded border border-[#d4af37] bg-[#6a0dad]/95 px-2 py-0.5 text-[9px] font-extrabold uppercase tracking-wider text-[#f0cf65] shadow'
+                          }
+                        >
+                          {(s.label || '').trim()}
+                        </span>
+                      )}
                       {showSocial && (
                         <PosterSocialBar
                           itemId={s.id}
@@ -884,7 +915,11 @@ export const SeriesView: React.FC<SeriesViewProps> = ({
         )}
       </div>
 
-      <SiteFooter settings={state.settings} onOpenInfo={onOpenInfo} onNotify={onNotify} />
+      <SiteFooter
+        settings={state.settings}
+        onOpenInfo={onOpenInfo}
+        onNotify={onNotify}
+      />
     </div>
   );
 };
@@ -1037,7 +1072,11 @@ export const LiveTvView: React.FC<LiveTvViewProps> = ({
         )}
       </div>
 
-      <SiteFooter settings={state.settings} onOpenInfo={onOpenInfo} onNotify={onNotify} />
+      <SiteFooter
+        settings={state.settings}
+        onOpenInfo={onOpenInfo}
+        onNotify={onNotify}
+      />
     </div>
   );
 };
@@ -1047,6 +1086,7 @@ export const LiveTvView: React.FC<LiveTvViewProps> = ({
 -------------------------------------------------------------------------- */
 interface SearchViewProps {
   state: AppState;
+  isSubscribed?: boolean;
   onWatchMovie: (id: string) => void;
   onWatchEpisode: (id: string) => void;
   onLikeMovie: (id: string) => void;
@@ -1058,6 +1098,7 @@ interface SearchViewProps {
 
 export const SearchView: React.FC<SearchViewProps> = ({
   state,
+  isSubscribed = false,
   onWatchMovie,
   onWatchEpisode,
   onLikeMovie,
@@ -1116,6 +1157,7 @@ export const SearchView: React.FC<SearchViewProps> = ({
             movies={matchedMovies}
             emptyText="No matching movies found."
             state={state}
+            isSubscribed={isSubscribed}
             onWatch={onWatchMovie}
             onLike={onLikeMovie}
             onShare={onShareMovie}
@@ -1157,7 +1199,7 @@ export const SearchView: React.FC<SearchViewProps> = ({
 };
 
 /* --------------------------------------------------------------------------
-   5. PROFILE & SEPARATE SUBSCRIPTION PLANS VIEW
+   5. PROFILE VIEW
 -------------------------------------------------------------------------- */
 interface ProfileViewProps {
   state: AppState;
@@ -1165,7 +1207,6 @@ interface ProfileViewProps {
   onOpenAuth: () => void;
   onLogout: () => void;
   onOpenAdmin: () => void;
-  onSelectPlan: (plan: PendingPlan) => void;
   onNotify?: (msg: string) => void;
 }
 
@@ -1175,24 +1216,8 @@ export const ProfileView: React.FC<ProfileViewProps> = ({
   onOpenAuth,
   onLogout,
   onOpenAdmin,
-  onSelectPlan,
   onNotify,
 }) => {
-  const pWeekly = Number(state.settings.priceWeekly || 5000);
-  const pMonthly = Number(state.settings.priceMonthly || 15000);
-  const pVip = Number(state.settings.priceVip || 30000);
-  const paymentPlans =
-    Array.isArray(state.settings.paymentPlans) && state.settings.paymentPlans.length > 0
-      ? state.settings.paymentPlans
-      : [
-          { id: 'plan_weekly', name: 'Weekly', price: pWeekly, days: 7 },
-          { id: 'plan_monthly', name: 'Monthly', price: pMonthly, days: 30 },
-          { id: 'plan_vip', name: 'VIP', price: pVip, days: 30 },
-        ];
-  const expiryStr = state.currentUser?.expiry
-    ? new Date(state.currentUser.expiry).toLocaleDateString()
-    : '-';
-
   const liveAccount = state.currentUser && state.currentUser.role !== 'admin'
     ? state.users.find(
         (u) =>
@@ -1201,7 +1226,17 @@ export const ProfileView: React.FC<ProfileViewProps> = ({
           u.phone === state.currentUser?.phone
       )
     : undefined;
+
+  const effectiveExpiry = liveAccount?.expiry || state.currentUser?.expiry || 0;
+  const expiryStr = effectiveExpiry ? new Date(effectiveExpiry).toLocaleString() : '-';
   const effectiveStatus = liveAccount?.status || state.currentUser?.status;
+  const wasSubscribedExpired = Boolean(
+    effectiveStatus !== 'blocked' &&
+      !isSubscribed &&
+      (liveAccount?.subscribed || state.currentUser?.subscribed) &&
+      effectiveExpiry > 0 &&
+      effectiveExpiry <= Date.now()
+  );
 
   return (
     <div className="px-4 py-5">
@@ -1215,7 +1250,7 @@ export const ProfileView: React.FC<ProfileViewProps> = ({
             Customer Account
           </h3>
           <p className="mb-3.5 text-sm text-white/85">
-            Sign in with your Phone, Email, and Password to manage your subscription and watch movies.
+            Sign in with your Phone, Email, and Password to manage your account and watch movies.
           </p>
           <button
             type="button"
@@ -1231,6 +1266,12 @@ export const ProfileView: React.FC<ProfileViewProps> = ({
             Account Details
           </h3>
           <div className="space-y-1.5 text-sm text-white">
+            {(liveAccount?.name || state.currentUser.name) && (
+              <div>
+                <span className="font-bold text-[#f0cf65]">Name:</span>{' '}
+                {liveAccount?.name || state.currentUser.name}
+              </div>
+            )}
             <div>
               <span className="font-bold text-[#f0cf65]">Phone:</span> {state.currentUser.phone}
             </div>
@@ -1250,8 +1291,14 @@ export const ProfileView: React.FC<ProfileViewProps> = ({
                 <span className="font-bold text-emerald-400">
                   Active ({liveAccount?.plan || state.currentUser.plan} until {expiryStr})
                 </span>
+              ) : wasSubscribedExpired ? (
+                <span className="font-bold text-amber-300">
+                  Expired ({expiryStr}) — Tap any movie poster to subscribe
+                </span>
               ) : (
-                <span className="font-bold text-rose-400">Not Subscribed</span>
+                <span className="font-bold text-rose-400">
+                  Not Subscribed — Tap any movie poster to subscribe
+                </span>
               )}
             </div>
           </div>
@@ -1296,53 +1343,6 @@ export const ProfileView: React.FC<ProfileViewProps> = ({
           Connect with VJ EMMA - TRUE LIGHT PRODUCTION on WhatsApp, YouTube, Facebook, and TikTok.
         </p>
         <SocialPlatformsRow settings={state.settings} onNotify={onNotify} />
-      </div>
-
-      <div className="mb-2 border-b border-[#6a0dad]/50 pb-2">
-        <h2 className="font-display text-lg font-semibold text-white">Subscription Plans</h2>
-      </div>
-      <p className="mb-4 text-sm text-white/85">
-        Subscribe first before watching any movie, series, or Live TV. Pay with Pesapal or Manual WhatsApp (0776043203).
-      </p>
-
-      <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
-        {paymentPlans.map((planItem, idx) => {
-          const isFeatured = idx === paymentPlans.length - 1 && paymentPlans.length > 1;
-          return (
-            <div
-              key={planItem.id}
-              className={`flex flex-col gap-2.5 rounded-xl border-2 p-5 ${
-                isFeatured
-                  ? 'border-[#d4af37] bg-gradient-to-b from-[#6a0dad]/40 to-[#110e1a]'
-                  : 'border-[#6a0dad] bg-[#110e1a]'
-              }`}
-            >
-              <div className="font-display text-lg font-semibold text-[#f0cf65]">
-                {planItem.name}
-              </div>
-              <div className="text-2xl font-bold text-white tabular-nums">
-                UGX {Number(planItem.price).toLocaleString()}
-              </div>
-              <p className="text-sm text-white/85">
-                {planItem.days} {planItem.days === 1 ? 'Day' : 'Days'} full access to Luo movies,
-                series &amp; Live TV. Instant WhatsApp confirmation.
-              </p>
-              <button
-                type="button"
-                onClick={() =>
-                  onSelectPlan({
-                    planName: planItem.name,
-                    amount: Number(planItem.price),
-                    days: Number(planItem.days),
-                  })
-                }
-                className="mt-auto min-h-[46px] w-full rounded-lg bg-gradient-to-r from-[#d4af37] to-[#f0cf65] px-4 py-2.5 text-sm font-bold text-black"
-              >
-                Subscribe {planItem.name}
-              </button>
-            </div>
-          );
-        })}
       </div>
     </div>
   );

@@ -2,17 +2,48 @@ import { useCallback, useEffect, useState } from 'react';
 import { Film, Home, Radio, Search, Tv, User } from 'lucide-react';
 import { AdminPanel } from './components/AdminPanel';
 import { HomeView, LiveTvView, MoviesView, ProfileView, SearchView, SeriesView } from './components/CustomerViews';
-import { AuthModal, CommentsModal, InfoModal, PesapalModal, PlayerModal } from './components/Modals';
+import {
+  AdminLoginPage,
+  AuthModal,
+  CommentsModal,
+  InfoModal,
+  PaymentSuccessPage,
+  PENDING_PESAPAL_ORDER_KEY,
+  PendingPesapalOrder,
+  PesapalModal,
+  PlansModal,
+  PlayerModal,
+  WorkerStatusResponse,
+} from './components/Modals';
 import { OfflineIndicator } from './components/PWAInstallButton';
-import { BRAND_LOGO_URL, loadState, openMediaDB, resolveMediaUrl, saveState } from './storage';
+import {
+  BRAND_LOGO_URL,
+  DB_KEY,
+  LIVE_SYNC_CHANNEL,
+  loadState,
+  LOCKED_ADMIN_EMAIL,
+  openMediaDB,
+  resolveMediaUrl,
+  saveState,
+} from './storage';
 import type { AppState, AppView, InfoModalType, LiveTvChannel, PendingPlan, PlayerMedia } from './types';
+
+const PROCESSED_PESAPAL_ORDERS_KEY = 'vj_emma_processed_pesapal_orders';
 
 export default function App() {
   const [state, setState] = useState<AppState>(() => loadState());
   const [currentView, setCurrentView] = useState<AppView>('home');
+  const [isPaymentSuccessRoute, setIsPaymentSuccessRoute] = useState<boolean>(() =>
+    typeof window !== 'undefined' && window.location.pathname.startsWith('/payment-success')
+  );
+  const [isAdminRoute, setIsAdminRoute] = useState<boolean>(() =>
+    typeof window !== 'undefined' && window.location.pathname.toLowerCase().startsWith('/admin')
+  );
   const [toastMessage, setToastMessage] = useState<string | null>(null);
 
   const [authModalOpen, setAuthModalOpen] = useState(false);
+  const [pendingPlansAfterAuth, setPendingPlansAfterAuth] = useState(false);
+  const [plansModalOpen, setPlansModalOpen] = useState(false);
   const [pendingPlan, setPendingPlan] = useState<PendingPlan | null>(null);
   const [activePlayerMedia, setActivePlayerMedia] = useState<PlayerMedia | null>(null);
   const [commentsMovieId, setCommentsMovieId] = useState<string | null>(null);
@@ -25,8 +56,46 @@ export default function App() {
   }, []);
 
   useEffect(() => {
-    document.title = state.settings.appName || 'VJ EMMA - TRUE LIGHT PRODUCTION';
-  }, [state.settings.appName]);
+    const syncFromStorage = () => {
+      const fresh = loadState();
+      setState((prev) => ({
+        ...fresh,
+        isAdminLoggedIn: prev.isAdminLoggedIn,
+        currentUser: prev.isAdminLoggedIn ? prev.currentUser : fresh.currentUser,
+      }));
+    };
+
+    const onStorage = (e: StorageEvent) => {
+      if (!e.key || e.key === DB_KEY) {
+        syncFromStorage();
+      }
+    };
+    window.addEventListener('storage', onStorage);
+
+    let bc: BroadcastChannel | null = null;
+    if ('BroadcastChannel' in window) {
+      bc = new BroadcastChannel(LIVE_SYNC_CHANNEL);
+      bc.onmessage = () => syncFromStorage();
+    }
+
+    return () => {
+      window.removeEventListener('storage', onStorage);
+      bc?.close();
+    };
+  }, []);
+
+  useEffect(() => {
+    const onPopState = () => {
+      setIsPaymentSuccessRoute(window.location.pathname.startsWith('/payment-success'));
+      setIsAdminRoute(window.location.pathname.toLowerCase().startsWith('/admin'));
+    };
+    window.addEventListener('popstate', onPopState);
+    return () => window.removeEventListener('popstate', onPopState);
+  }, []);
+
+  useEffect(() => {
+    document.title = 'VJ Emma - True Light Production | The Pride of Luo';
+  }, []);
 
   const showToast = useCallback((msg: string) => {
     setToastMessage(msg);
@@ -48,15 +117,60 @@ export default function App() {
 
   const switchView = useCallback(
     (viewName: AppView) => {
-      if (viewName === 'admin' && !state.isAdminLoggedIn) {
-        setAuthModalOpen(true);
+      if (viewName === 'admin') {
+        try {
+          window.history.pushState({}, '', '/admin');
+        } catch {
+          // Ignore pushState restrictions
+        }
+        setIsPaymentSuccessRoute(false);
+        setIsAdminRoute(true);
+        if (state.isAdminLoggedIn) {
+          setCurrentView('admin');
+        }
+        window.scrollTo({ top: 0, behavior: 'instant' as ScrollBehavior });
         return;
       }
+
+      if (isPaymentSuccessRoute || isAdminRoute) {
+        try {
+          window.history.pushState({}, '', '/');
+        } catch {
+          // Ignore pushState restrictions
+        }
+        setIsPaymentSuccessRoute(false);
+        setIsAdminRoute(false);
+      }
+
       setCurrentView(viewName);
       window.scrollTo({ top: 0, behavior: 'instant' as ScrollBehavior });
     },
-    [state.isAdminLoggedIn]
+    [isAdminRoute, isPaymentSuccessRoute, state.isAdminLoggedIn]
   );
+
+  const paymentPlans =
+    Array.isArray(state.settings.paymentPlans) && state.settings.paymentPlans.length > 0
+      ? state.settings.paymentPlans
+      : [
+          {
+            id: 'plan_weekly',
+            name: 'Weekly',
+            price: Number(state.settings.priceWeekly || 5000),
+            days: 7,
+          },
+          {
+            id: 'plan_monthly',
+            name: 'Monthly',
+            price: Number(state.settings.priceMonthly || 15000),
+            days: 30,
+          },
+          {
+            id: 'plan_vip',
+            name: 'VIP',
+            price: Number(state.settings.priceVip || 30000),
+            days: 30,
+          },
+        ];
 
   const liveCustomerAccount =
     state.currentUser && state.currentUser.role !== 'admin'
@@ -79,16 +193,16 @@ export default function App() {
       state.currentUser.role !== 'admin' &&
       !isBlocked &&
       liveCustomerAccount?.status === 'pending' &&
-      !liveCustomerAccount?.subscribed
+      (!liveCustomerAccount?.subscribed || liveCustomerAccount.expiry <= Date.now())
   );
 
   const isSubscribed = Boolean(
     state.isAdminLoggedIn ||
       (state.currentUser &&
         !isBlocked &&
-        ((liveCustomerAccount
+        (liveCustomerAccount
           ? liveCustomerAccount.subscribed && liveCustomerAccount.expiry > Date.now()
-          : state.currentUser.subscribed && state.currentUser.expiry > Date.now())))
+          : state.currentUser.subscribed && state.currentUser.expiry > Date.now()))
   );
 
   const handleHeaderAction = () => {
@@ -100,39 +214,47 @@ export default function App() {
       switchView('profile');
       return;
     }
+    setPendingPlansAfterAuth(false);
     setAuthModalOpen(true);
   };
 
+  const handleAdminLoginSubmit = (email: string, password: string) => {
+    const cleanEmail = email.trim().toLowerCase();
+    if (!cleanEmail || !password) {
+      showToast('Enter Admin Email and Password.');
+      return;
+    }
+    if (cleanEmail !== LOCKED_ADMIN_EMAIL.toLowerCase()) {
+      showToast('Access denied: Admin is locked to the authorized email only.');
+      return;
+    }
+    if (password !== state.adminPassword) {
+      showToast('Incorrect Admin Password.');
+      return;
+    }
+
+    updateState((prev) => ({
+      ...prev,
+      adminEmail: LOCKED_ADMIN_EMAIL,
+      isAdminLoggedIn: true,
+      currentUser: {
+        phone: 'Admin',
+        email: LOCKED_ADMIN_EMAIL,
+        role: 'admin',
+        subscribed: true,
+        plan: 'Admin',
+        expiry: Date.now() + 365 * 86400000,
+      },
+    }));
+    setPendingPlansAfterAuth(false);
+    setAuthModalOpen(false);
+    setIsAdminRoute(true);
+    setCurrentView('admin');
+    showToast('Welcome Admin');
+  };
+
   const handleAuthSubmit = (phone: string, email: string, password: string) => {
-    if (!email || !password) {
-      showToast('Enter Email and Password.');
-      return;
-    }
-
-    const configuredAdminEmail = (state.adminEmail || '').trim().toLowerCase();
-    const adminEmailMatches =
-      !configuredAdminEmail || email.toLowerCase() === configuredAdminEmail;
-
-    if (password === state.adminPassword && adminEmailMatches) {
-      updateState((prev) => ({
-        ...prev,
-        isAdminLoggedIn: true,
-        currentUser: {
-          phone: phone || 'Admin',
-          email,
-          role: 'admin',
-          subscribed: true,
-          plan: 'VIP',
-          expiry: Date.now() + 365 * 86400000,
-        },
-      }));
-      setAuthModalOpen(false);
-      showToast('Welcome Admin');
-      setCurrentView('admin');
-      return;
-    }
-
-    if (!phone) {
+    if (!phone || !email || !password) {
       showToast('Enter Phone, Email, and Password.');
       return;
     }
@@ -142,6 +264,7 @@ export default function App() {
     );
 
     if (existing && existing.status === 'blocked') {
+      setPendingPlansAfterAuth(false);
       showToast('Your account has been blocked by Admin.');
       return;
     }
@@ -150,6 +273,9 @@ export default function App() {
       showToast('Incorrect password.');
       return;
     }
+
+    let signedInRecordSubscribed = false;
+    let signedInRecordPending = false;
 
     updateState((prev) => {
       const idx = prev.users.findIndex(
@@ -176,12 +302,23 @@ export default function App() {
         nextUsers = prev.users.map((u, i) => (i === idx ? userRecord! : u));
       }
 
+      const now = Date.now();
+      signedInRecordSubscribed = Boolean(
+        userRecord.subscribed && userRecord.expiry > now && userRecord.status !== 'blocked'
+      );
+      signedInRecordPending = Boolean(
+        userRecord.status === 'pending' &&
+          Boolean(userRecord.pendingPlan) &&
+          !signedInRecordSubscribed
+      );
+
       return {
         ...prev,
         users: nextUsers,
         isAdminLoggedIn: false,
         currentUser: {
           id: userRecord.id,
+          name: userRecord.name,
           phone: userRecord.phone,
           email: userRecord.email,
           role: 'customer',
@@ -193,8 +330,19 @@ export default function App() {
       };
     });
 
+    const openPlansNow = pendingPlansAfterAuth;
+    setPendingPlansAfterAuth(false);
     setAuthModalOpen(false);
     showToast('Signed in successfully.');
+
+    if (openPlansNow && !signedInRecordSubscribed) {
+      if (signedInRecordPending) {
+        showToast('Your WhatsApp payment is pending Admin approval.');
+        switchView('profile');
+      } else {
+        setPlansModalOpen(true);
+      }
+    }
   };
 
   const handleLogout = () => {
@@ -203,107 +351,192 @@ export default function App() {
       currentUser: null,
       isAdminLoggedIn: false,
     }));
+    setPendingPlansAfterAuth(false);
+    setPlansModalOpen(false);
+    setPendingPlan(null);
     showToast('Signed out.');
     setCurrentView('home');
   };
 
-  const handlePesapalPayment = (phone: string, email: string, method: string) => {
-    if (!phone || !email || !pendingPlan) {
-      showToast('Enter client phone and email.');
-      return;
-    }
+  const handleWorkerPaymentCompleted = useCallback(
+    (orderId: string, workerData: WorkerStatusResponse, savedOrder: PendingPesapalOrder | null) => {
+      const cleanName = String(
+        workerData.name || savedOrder?.name || state.currentUser?.name || ''
+      ).trim();
+      const cleanPhone = String(
+        workerData.phone || savedOrder?.phone || state.currentUser?.phone || ''
+      ).trim();
+      const cleanEmail = String(
+        workerData.email || savedOrder?.email || state.currentUser?.email || ''
+      ).trim();
 
-    const expiry = Date.now() + pendingPlan.days * 86400000;
+      const fallbackPlan = paymentPlans[0] || { id: 'plan_1', name: 'Subscription', price: 5000, days: 1 };
+      const planName = String(
+        workerData.planName || savedOrder?.planName || fallbackPlan.name
+      ).trim();
 
-    updateState((prev) => {
-      const existingIdx = prev.users.findIndex(
-        (u) => u.phone === phone || u.email.toLowerCase() === email.toLowerCase()
+      const matchedPlan = paymentPlans.find(
+        (p) => p.name.toLowerCase() === planName.toLowerCase()
       );
-      if (existingIdx !== -1 && prev.users[existingIdx].status === 'blocked') {
-        return prev;
+      const amount = Number(
+        workerData.amount || savedOrder?.amount || matchedPlan?.price || fallbackPlan.price
+      );
+      const days = Math.max(
+        1,
+        Number(workerData.days || savedOrder?.days || matchedPlan?.days || fallbackPlan.days || 1)
+      );
+      const method = savedOrder?.method ? `Pesapal (${savedOrder.method})` : 'Pesapal';
+      const now = Date.now();
+      const calculatedExpiry = now + days * 86400000;
+
+      let processedIds: string[] = [];
+      try {
+        processedIds = JSON.parse(localStorage.getItem(PROCESSED_PESAPAL_ORDERS_KEY) || '[]');
+        if (!Array.isArray(processedIds)) processedIds = [];
+      } catch {
+        processedIds = [];
       }
 
-      let nextUsers = [...prev.users];
-      let userId = 'usr_' + Date.now();
+      const txId = `tx_pesapal_${orderId}`;
+      const alreadyProcessed =
+        processedIds.includes(orderId) ||
+        Boolean((state.walletTransactions || []).some((tx) => tx.id === txId));
 
-      if (existingIdx === -1) {
-        nextUsers.push({
-          id: userId,
-          phone,
-          email,
-          password: '',
-          subscribed: true,
-          plan: pendingPlan.planName,
-          pendingPlan: null,
-          pendingAmount: 0,
-          pendingDays: 0,
-          paymentMethod: `Pesapal (${method})`,
-          status: 'approved',
-          expiry,
-          createdAt: Date.now(),
+      if (!alreadyProcessed) {
+        updateState((prev) => {
+          const existingIdx = prev.users.findIndex(
+            (u) =>
+              (cleanPhone && u.phone === cleanPhone) ||
+              (cleanEmail && u.email.toLowerCase() === cleanEmail.toLowerCase())
+          );
+
+          if (existingIdx !== -1 && prev.users[existingIdx].status === 'blocked') {
+            return prev;
+          }
+
+          const nextUsers = [...prev.users];
+          let userId = 'usr_' + now;
+
+          if (existingIdx === -1) {
+            nextUsers.unshift({
+              id: userId,
+              name: cleanName || undefined,
+              phone: cleanPhone || cleanEmail || 'Customer',
+              email: cleanEmail || `${cleanPhone}@vjemma.site`,
+              password: '',
+              subscribed: true,
+              plan: planName,
+              pendingPlan: null,
+              pendingAmount: 0,
+              pendingDays: 0,
+              paymentMethod: method,
+              status: 'approved',
+              expiry: calculatedExpiry,
+              createdAt: now,
+            });
+          } else {
+            userId = nextUsers[existingIdx].id;
+            nextUsers[existingIdx] = {
+              ...nextUsers[existingIdx],
+              name: cleanName || nextUsers[existingIdx].name,
+              phone: cleanPhone || nextUsers[existingIdx].phone,
+              email: cleanEmail || nextUsers[existingIdx].email,
+              subscribed: true,
+              plan: planName,
+              pendingPlan: null,
+              pendingAmount: 0,
+              pendingDays: 0,
+              paymentMethod: method,
+              status: 'approved',
+              expiry: calculatedExpiry,
+            };
+          }
+
+          const subscribedCount = nextUsers.filter(
+            (u) => u.subscribed && u.status !== 'blocked' && u.expiry > now
+          ).length;
+
+          const nextTx = {
+            id: txId,
+            name: cleanName || undefined,
+            phone: cleanPhone || cleanEmail || 'Customer',
+            email: cleanEmail,
+            plan: planName,
+            amount,
+            method,
+            status: 'completed' as const,
+            createdAt: now,
+          };
+
+          const shouldUpdateCurrent = !prev.currentUser || prev.currentUser.role !== 'admin';
+
+          return {
+            ...prev,
+            users: nextUsers,
+            clients: Math.max(prev.clients, subscribedCount),
+            wallet: prev.wallet + amount,
+            walletTransactions: [nextTx, ...(prev.walletTransactions || [])],
+            currentUser: shouldUpdateCurrent
+              ? {
+                  id: userId,
+                  name: cleanName || prev.currentUser?.name,
+                  phone: cleanPhone || prev.currentUser?.phone || '',
+                  email: cleanEmail || prev.currentUser?.email || '',
+                  role: 'customer',
+                  subscribed: true,
+                  plan: planName,
+                  status: 'approved',
+                  expiry: calculatedExpiry,
+                }
+              : prev.currentUser,
+          };
         });
-      } else {
-        userId = nextUsers[existingIdx].id;
-        nextUsers[existingIdx] = {
-          ...nextUsers[existingIdx],
-          phone,
-          email,
-          subscribed: true,
-          plan: pendingPlan.planName,
-          pendingPlan: null,
-          pendingAmount: 0,
-          pendingDays: 0,
-          paymentMethod: `Pesapal (${method})`,
-          status: 'approved',
-          expiry,
-        };
-      }
 
-      const subscribedCount = nextUsers.filter((u) => u.subscribed).length;
-      const nextTx = {
-        id: 'tx_' + Date.now(),
-        phone,
-        email,
-        plan: pendingPlan.planName,
-        amount: Number(pendingPlan.amount),
-        method: `Pesapal (${method})`,
-        status: 'completed' as const,
-        createdAt: Date.now(),
-      };
+        try {
+          localStorage.setItem(
+            PROCESSED_PESAPAL_ORDERS_KEY,
+            JSON.stringify([...processedIds.slice(-49), orderId])
+          );
+          localStorage.removeItem(PENDING_PESAPAL_ORDER_KEY);
+        } catch {
+          // Ignore storage issues
+        }
+      }
 
       return {
-        ...prev,
-        users: nextUsers,
-        clients: Math.max(prev.clients, subscribedCount),
-        wallet: prev.wallet + Number(pendingPlan.amount),
-        walletTransactions: [nextTx, ...(prev.walletTransactions || [])],
-        currentUser: prev.currentUser
-          ? {
-              ...prev.currentUser,
-              subscribed: true,
-              plan: pendingPlan.planName,
-              status: 'approved',
-              expiry,
-            }
-          : {
-              id: userId,
-              phone,
-              email,
-              role: 'customer',
-              subscribed: true,
-              plan: pendingPlan.planName,
-              status: 'approved',
-              expiry,
-            },
+        expiry: calculatedExpiry,
+        planName,
+        amount,
+        name: cleanName || cleanPhone,
+        phone: cleanPhone,
+        email: cleanEmail,
       };
-    });
+    },
+    [paymentPlans, state.currentUser, state.walletTransactions, updateState]
+  );
 
-    const paidPhone = phone;
-    setPendingPlan(null);
-    showToast(`Pesapal Paid (${method})! WhatsApp message sent automatically to ${paidPhone}`);
-  };
+  const handleReturnFromPaymentSuccess = useCallback(
+    (openPlans?: boolean) => {
+      try {
+        window.history.pushState({}, '', '/');
+      } catch {
+        // Ignore pushState restrictions
+      }
+      setIsPaymentSuccessRoute(false);
+      setCurrentView('home');
+      if (openPlans) {
+        setPlansModalOpen(true);
+      }
+    },
+    []
+  );
 
-  const handleManualWhatsappPayment = (phone: string, email: string, method: string) => {
+  const handleManualWhatsappPayment = (
+    phone: string,
+    email: string,
+    method: string,
+    name?: string
+  ) => {
     if (!phone || !email || !pendingPlan) {
       showToast('Enter your phone number and email first.');
       return;
@@ -318,15 +551,18 @@ export default function App() {
     }
 
     updateState((prev) => {
+      const now = Date.now();
       const existingIdx = prev.users.findIndex(
         (u) => u.phone === phone || u.email.toLowerCase() === email.toLowerCase()
       );
       const nextUsers = [...prev.users];
-      let userId = 'usr_' + Date.now();
+      let userId = 'usr_' + now;
+      let stillActive = false;
 
       if (existingIdx === -1) {
         nextUsers.push({
           id: userId,
+          name: name || undefined,
           phone,
           email,
           password: '',
@@ -334,36 +570,46 @@ export default function App() {
           plan: null,
           pendingPlan: pendingPlan.planName,
           pendingAmount: Number(pendingPlan.amount),
-          pendingDays: pendingPlan.days,
+          pendingDays: Number(pendingPlan.days || 1),
           paymentMethod: `Manual WhatsApp (${method})`,
           status: 'pending',
           expiry: 0,
-          createdAt: Date.now(),
+          createdAt: now,
         });
       } else {
         userId = nextUsers[existingIdx].id;
+        stillActive = Boolean(
+          nextUsers[existingIdx].subscribed && nextUsers[existingIdx].expiry > now
+        );
         nextUsers[existingIdx] = {
           ...nextUsers[existingIdx],
+          name: name || nextUsers[existingIdx].name,
           phone,
           email,
+          subscribed: stillActive,
           pendingPlan: pendingPlan.planName,
           pendingAmount: Number(pendingPlan.amount),
-          pendingDays: pendingPlan.days,
+          pendingDays: Number(pendingPlan.days || 1),
           paymentMethod: `Manual WhatsApp (${method})`,
-          status: nextUsers[existingIdx].subscribed ? 'approved' : 'pending',
+          status: stillActive ? 'approved' : 'pending',
         };
       }
 
       const nextTx = {
-        id: 'tx_' + Date.now(),
+        id: 'tx_' + now,
+        name: name || undefined,
         phone,
         email,
         plan: pendingPlan.planName,
         amount: Number(pendingPlan.amount),
         method: `Manual WhatsApp (${method})`,
         status: 'pending' as const,
-        createdAt: Date.now(),
+        createdAt: now,
       };
+
+      const prevCurrentActive = Boolean(
+        prev.currentUser?.subscribed && (prev.currentUser?.expiry || 0) > now
+      );
 
       return {
         ...prev,
@@ -372,10 +618,13 @@ export default function App() {
         currentUser: prev.currentUser
           ? {
               ...prev.currentUser,
-              status: prev.currentUser.subscribed ? 'approved' : 'pending',
+              name: name || prev.currentUser.name,
+              subscribed: prevCurrentActive || stillActive,
+              status: prevCurrentActive || stillActive ? 'approved' : 'pending',
             }
           : {
               id: userId,
+              name: name || undefined,
               phone,
               email,
               role: 'customer',
@@ -390,7 +639,17 @@ export default function App() {
     showToast('Manual WhatsApp request submitted! Pending Admin approval.');
   };
 
-  const guardPlaybackAccess = (label: string): boolean => {
+  const guardPlaybackAccess = (label: string, isVipPoster = false): boolean => {
+    if (!state.currentUser) {
+      setPendingPlansAfterAuth(true);
+      setAuthModalOpen(true);
+      showToast(
+        isVipPoster
+          ? 'VIP movie locked. Please sign in and pay to watch or download.'
+          : `Please sign in first to choose a plan and watch ${label}.`
+      );
+      return false;
+    }
     if (isBlocked) {
       showToast('Your account is blocked by Admin.');
       switchView('profile');
@@ -402,17 +661,25 @@ export default function App() {
       return false;
     }
     if (!isSubscribed) {
-      showToast(`Please subscribe first to watch ${label}.`);
-      switchView('profile');
+      showToast(
+        isVipPoster
+          ? 'This VIP movie cannot be watched or downloaded until you pay.'
+          : `Please subscribe to watch & download ${label}.`
+      );
+      setPlansModalOpen(true);
       return false;
     }
     return true;
   };
 
   const handleRequestWatchMovie = async (movieId: string) => {
-    if (!guardPlaybackAccess('movies')) return;
     const m = state.movies.find((x) => x.id === movieId);
     if (!m) return;
+    const isVipPoster = (m.label || '')
+      .split(',')
+      .map((t) => t.trim().toUpperCase())
+      .includes('VIP');
+    if (!guardPlaybackAccess('movies', isVipPoster)) return;
     const url = await resolveMediaUrl(m.video);
     if (!url) {
       showToast('No video source attached to this title.');
@@ -427,9 +694,14 @@ export default function App() {
   };
 
   const handleRequestWatchEpisode = async (episodeId: string) => {
-    if (!guardPlaybackAccess('episodes')) return;
     const ep = state.episodes.find((x) => x.id === episodeId);
     if (!ep) return;
+    const season = state.seasons.find((s) => s.id === ep.seasonId);
+    const isVipSeason = (season?.label || '')
+      .split(',')
+      .map((t) => t.trim().toUpperCase())
+      .includes('VIP');
+    if (!guardPlaybackAccess('episodes', isVipSeason)) return;
     const url = await resolveMediaUrl(ep.video);
     if (!url) {
       showToast('No video source attached to this episode.');
@@ -590,42 +862,42 @@ export default function App() {
   return (
     <div className="min-h-screen bg-[#050507] text-white">
       {/* TOP HEADER: LOGO + VJ EMMA LEFT, SEARCH + SIGN IN RIGHT */}
-      <header className="fixed inset-x-0 top-0 z-[900] flex h-16 items-center justify-between gap-3 border-b-2 border-[#6a0dad]/80 bg-gradient-to-r from-[#050507] via-[#130820] to-[#050507] px-3.5 backdrop-blur-md">
+      <header className="fixed inset-x-0 top-0 z-[900] flex h-16 items-center justify-between gap-2 border-b-2 border-[#6a0dad]/80 bg-gradient-to-r from-[#050507] via-[#130820] to-[#050507] px-2.5 sm:px-3.5 backdrop-blur-md">
         <button
           type="button"
           onClick={() => switchView('home')}
-          className="flex min-w-0 items-center gap-2.5 text-left"
+          className="flex min-w-0 shrink items-center gap-1.5 sm:gap-2.5 text-left"
         >
           <img
             src={BRAND_LOGO_URL}
             alt="VJ EMMA Logo"
             referrerPolicy="no-referrer"
-            className="h-11 w-11 shrink-0 rounded-full border-2 border-[#d4af37] bg-[#050507] object-cover shadow"
+            className="h-9 w-9 sm:h-11 sm:w-11 shrink-0 rounded-full border-2 border-[#d4af37] bg-[#050507] object-cover shadow"
           />
-          <span className="truncate font-brand text-xl font-bold tracking-[0.06em] text-[#f0cf65]">
+          <span className="whitespace-nowrap font-brand text-[15px] sm:text-xl font-bold tracking-[0.02em] sm:tracking-[0.06em] text-[#f0cf65]">
             {brandTitle}
           </span>
         </button>
 
-        <div className="flex shrink-0 items-center gap-2">
+        <div className="flex shrink-0 items-center gap-1.5 sm:gap-2">
           <button
             type="button"
             onClick={() => switchView('search')}
             aria-label="Search movies and series"
-            className={`flex min-h-[40px] items-center gap-1.5 whitespace-nowrap rounded-full border px-3.5 py-1.5 text-xs font-semibold transition-colors active:scale-95 ${
-              currentView === 'search'
+            className={`flex min-h-[38px] sm:min-h-[40px] items-center gap-1 whitespace-nowrap rounded-full border px-2.5 sm:px-3.5 py-1.5 text-[11px] sm:text-xs font-semibold transition-colors active:scale-95 ${
+              currentView === 'search' && !isPaymentSuccessRoute && !isAdminRoute
                 ? 'border-[#d4af37] bg-[#d4af37] text-black'
                 : 'border-[#6a0dad] bg-[#140d22] text-white hover:border-[#d4af37]'
             }`}
           >
-            <Search className="h-4 w-4" />
+            <Search className="h-3.5 w-3.5 sm:h-4 sm:w-4" />
             <span>Search</span>
           </button>
 
           <button
             type="button"
             onClick={handleHeaderAction}
-            className="min-h-[40px] shrink-0 whitespace-nowrap rounded-full border border-[#d4af37] bg-gradient-to-r from-[#6a0dad] to-[#4a077a] px-4 py-1.5 text-xs font-semibold text-white shadow transition-transform active:scale-95"
+            className="min-h-[38px] sm:min-h-[40px] shrink-0 whitespace-nowrap rounded-full border border-[#d4af37] bg-gradient-to-r from-[#6a0dad] to-[#4a077a] px-3 sm:px-4 py-1.5 text-[11px] sm:text-xs font-semibold text-white shadow transition-transform active:scale-95"
           >
             {headerBtnLabel}
           </button>
@@ -641,100 +913,126 @@ export default function App() {
 
       {/* MAIN CONTAINER */}
       <main className="mx-auto min-h-screen w-full max-w-[1200px] pb-[84px] pt-16">
-        {currentView === 'home' && (
-          <HomeView
-            state={state}
-            onWatchMovie={handleRequestWatchMovie}
-            onLikeMovie={handleToggleLike}
-            onShareMovie={handleShareMovie}
-            onOpenComments={(id) => setCommentsMovieId(id)}
-            onOpenInfo={(type) => setInfoModalType(type)}
-            onNotify={showToast}
-            onAdminEditMovie={handleAdminEditMovie}
-            onAdminDeleteMovie={handleAdminDeleteMovie}
+        {isPaymentSuccessRoute ? (
+          <PaymentSuccessPage
+            onPaymentCompleted={handleWorkerPaymentCompleted}
+            onReturnHome={handleReturnFromPaymentSuccess}
           />
-        )}
-
-        {currentView === 'movies' && (
-          <MoviesView
-            state={state}
-            onWatchMovie={handleRequestWatchMovie}
-            onLikeMovie={handleToggleLike}
-            onShareMovie={handleShareMovie}
-            onOpenComments={(id) => setCommentsMovieId(id)}
-            onOpenInfo={(type) => setInfoModalType(type)}
-            onNotify={showToast}
-            onAdminEditMovie={handleAdminEditMovie}
-            onAdminDeleteMovie={handleAdminDeleteMovie}
+        ) : isAdminRoute && !state.isAdminLoggedIn ? (
+          <AdminLoginPage
+            onSubmit={handleAdminLoginSubmit}
+            onReturnSite={() => switchView('home')}
           />
-        )}
-
-        {currentView === 'series' && (
-          <SeriesView
-            state={state}
-            seasons={state.seasons}
-            episodes={state.episodes}
-            socialLinksRaw={state.settings.socialLinks}
-            onWatchEpisode={handleRequestWatchEpisode}
-            onLike={handleToggleLike}
-            onShare={handleShareMovie}
-            onOpenComments={(id) => setCommentsMovieId(id)}
-            onOpenInfo={(type) => setInfoModalType(type)}
-            onNotify={showToast}
-          />
-        )}
-
-        {currentView === 'livetv' && (
-          <LiveTvView
-            state={state}
-            onWatchChannel={handleRequestWatchLiveTv}
-            onLike={handleToggleLike}
-            onShare={handleShareMovie}
-            onOpenComments={(id) => setCommentsMovieId(id)}
-            onOpenInfo={(type) => setInfoModalType(type)}
-            onNotify={showToast}
-            onAdminEditChannel={handleAdminEditChannel}
-            onAdminDeleteChannel={handleAdminDeleteChannel}
-          />
-        )}
-
-        {currentView === 'search' && (
-          <SearchView
-            state={state}
-            onWatchMovie={handleRequestWatchMovie}
-            onWatchEpisode={handleRequestWatchEpisode}
-            onLikeMovie={handleToggleLike}
-            onShareMovie={handleShareMovie}
-            onOpenComments={(id) => setCommentsMovieId(id)}
-            onAdminEditMovie={handleAdminEditMovie}
-            onAdminDeleteMovie={handleAdminDeleteMovie}
-          />
-        )}
-
-        {currentView === 'profile' && (
-          <ProfileView
-            state={state}
-            isSubscribed={isSubscribed}
-            onOpenAuth={() => setAuthModalOpen(true)}
-            onLogout={handleLogout}
-            onOpenAdmin={() => switchView('admin')}
-            onSelectPlan={(plan) => setPendingPlan(plan)}
-            onNotify={showToast}
-          />
-        )}
-
-        {currentView === 'admin' && state.isAdminLoggedIn && (
+        ) : (isAdminRoute || currentView === 'admin') && state.isAdminLoggedIn ? (
           <AdminPanel
             state={state}
             updateState={updateState}
             onViewSite={() => switchView('home')}
-            onLogout={handleLogout}
+            onLogout={() => {
+              try {
+                window.history.pushState({}, '', '/');
+              } catch {
+                // Ignore pushState restrictions
+              }
+              setIsAdminRoute(false);
+              handleLogout();
+            }}
             onNotify={showToast}
             initialEditMovieId={adminEditMovieId}
             onClearInitialEditMovie={() => setAdminEditMovieId(null)}
             initialEditChannelId={adminEditChannelId}
             onClearInitialEditChannel={() => setAdminEditChannelId(null)}
           />
+        ) : (
+          <>
+            {currentView === 'home' && (
+              <HomeView
+                state={state}
+                isSubscribed={isSubscribed}
+                onWatchMovie={handleRequestWatchMovie}
+                onLikeMovie={handleToggleLike}
+                onShareMovie={handleShareMovie}
+                onOpenComments={(id) => setCommentsMovieId(id)}
+                onOpenInfo={(type) => setInfoModalType(type)}
+                onBannerAction={() => switchView('movies')}
+                onNotify={showToast}
+                onAdminEditMovie={handleAdminEditMovie}
+                onAdminDeleteMovie={handleAdminDeleteMovie}
+              />
+            )}
+
+            {currentView === 'movies' && (
+              <MoviesView
+                state={state}
+                isSubscribed={isSubscribed}
+                onWatchMovie={handleRequestWatchMovie}
+                onLikeMovie={handleToggleLike}
+                onShareMovie={handleShareMovie}
+                onOpenComments={(id) => setCommentsMovieId(id)}
+                onOpenInfo={(type) => setInfoModalType(type)}
+                onNotify={showToast}
+                onAdminEditMovie={handleAdminEditMovie}
+                onAdminDeleteMovie={handleAdminDeleteMovie}
+              />
+            )}
+
+            {currentView === 'series' && (
+              <SeriesView
+                state={state}
+                seasons={state.seasons}
+                episodes={state.episodes}
+                socialLinksRaw={state.settings.socialLinks}
+                onWatchEpisode={handleRequestWatchEpisode}
+                onLike={handleToggleLike}
+                onShare={handleShareMovie}
+                onOpenComments={(id) => setCommentsMovieId(id)}
+                onOpenInfo={(type) => setInfoModalType(type)}
+                onNotify={showToast}
+              />
+            )}
+
+            {currentView === 'livetv' && (
+              <LiveTvView
+                state={state}
+                onWatchChannel={handleRequestWatchLiveTv}
+                onLike={handleToggleLike}
+                onShare={handleShareMovie}
+                onOpenComments={(id) => setCommentsMovieId(id)}
+                onOpenInfo={(type) => setInfoModalType(type)}
+                onNotify={showToast}
+                onAdminEditChannel={handleAdminEditChannel}
+                onAdminDeleteChannel={handleAdminDeleteChannel}
+              />
+            )}
+
+            {currentView === 'search' && (
+              <SearchView
+                state={state}
+                isSubscribed={isSubscribed}
+                onWatchMovie={handleRequestWatchMovie}
+                onWatchEpisode={handleRequestWatchEpisode}
+                onLikeMovie={handleToggleLike}
+                onShareMovie={handleShareMovie}
+                onOpenComments={(id) => setCommentsMovieId(id)}
+                onAdminEditMovie={handleAdminEditMovie}
+                onAdminDeleteMovie={handleAdminDeleteMovie}
+              />
+            )}
+
+            {currentView === 'profile' && (
+              <ProfileView
+                state={state}
+                isSubscribed={isSubscribed}
+                onOpenAuth={() => {
+                  setPendingPlansAfterAuth(false);
+                  setAuthModalOpen(true);
+                }}
+                onLogout={handleLogout}
+                onOpenAdmin={() => switchView('admin')}
+                onNotify={showToast}
+              />
+            )}
+          </>
         )}
       </main>
 
@@ -752,7 +1050,7 @@ export default function App() {
             ['profile', 'Profile', User],
           ] as [AppView, string, typeof Home][]
         ).map(([viewKey, label, Icon]) => {
-          const active = currentView === viewKey;
+          const active = !isPaymentSuccessRoute && !isAdminRoute && currentView === viewKey;
           return (
             <button
               key={viewKey}
@@ -774,8 +1072,21 @@ export default function App() {
       {/* MODALS */}
       <AuthModal
         open={authModalOpen}
-        onClose={() => setAuthModalOpen(false)}
+        onClose={() => {
+          setPendingPlansAfterAuth(false);
+          setAuthModalOpen(false);
+        }}
         onSubmit={handleAuthSubmit}
+      />
+
+      <PlansModal
+        open={plansModalOpen}
+        plans={paymentPlans}
+        onClose={() => setPlansModalOpen(false)}
+        onSelectPlan={(plan) => {
+          setPlansModalOpen(false);
+          setPendingPlan(plan);
+        }}
       />
 
       <PesapalModal
@@ -783,8 +1094,8 @@ export default function App() {
         onClose={() => setPendingPlan(null)}
         plan={pendingPlan}
         currentUser={state.currentUser}
-        onCompletePayment={handlePesapalPayment}
         onManualWhatsappPayment={handleManualWhatsappPayment}
+        onNotify={showToast}
       />
 
       <PlayerModal
