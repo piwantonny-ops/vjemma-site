@@ -6,6 +6,7 @@ import {
   LOCKED_ADMIN_EMAIL,
   normalizeSocialUrl,
   parseGenreLine,
+  parseMovieGenres,
   resolveMediaUrl,
   useResolvedMedia,
 } from '../storage';
@@ -59,6 +60,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
   const [editMovieId, setEditMovieId] = useState('');
   const [movieTitle, setMovieTitle] = useState('');
   const [movieYear, setMovieYear] = useState('');
+  const [movieDuration, setMovieDuration] = useState('');
   const [movieRating, setMovieRating] = useState('');
   const [movieGenre, setMovieGenre] = useState('');
   const [movieActors, setMovieActors] = useState('');
@@ -96,6 +98,10 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
   const [seasonSeriesTitle, setSeasonSeriesTitle] = useState('');
   const [seasonNumber, setSeasonNumber] = useState('');
   const [seasonLabel, setSeasonLabel] = useState('');
+  const [seasonYear, setSeasonYear] = useState('');
+  const [seasonDuration, setSeasonDuration] = useState('');
+  const [seasonActors, setSeasonActors] = useState('');
+  const [seasonDescription, setSeasonDescription] = useState('');
   const [seasonPosterLink, setSeasonPosterLink] = useState('');
   const [seasonPosterPreview, setSeasonPosterPreview] = useState('');
   const [seasonPosterRemoved, setSeasonPosterRemoved] = useState(false);
@@ -182,6 +188,21 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
   const blockedClientsCount = state.users.filter((u) => u.status === 'blocked').length;
 
   const oneLineGenres = parseGenreLine(state.settings.genreLine);
+  const selectedMovieGenres = parseMovieGenres(movieGenre);
+  const availableMovieGenreChoices = Array.from(
+    new Map(
+      [...oneLineGenres, ...selectedMovieGenres].map((g) => [g.toLowerCase(), g])
+    ).values()
+  );
+
+  const toggleMovieGenre = (genreName: string) => {
+    const targetKey = genreName.trim().toLowerCase();
+    const exists = selectedMovieGenres.some((g) => g.toLowerCase() === targetKey);
+    const next = exists
+      ? selectedMovieGenres.filter((g) => g.toLowerCase() !== targetKey)
+      : [...selectedMovieGenres, genreName.trim()];
+    setMovieGenre(next.join(', '));
+  };
 
   const configuredPaymentPlans =
     Array.isArray(state.settings.paymentPlans) && state.settings.paymentPlans.length > 0
@@ -320,6 +341,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
     setEditMovieId('');
     setMovieTitle('');
     setMovieYear('');
+    setMovieDuration('');
     setMovieRating('');
     setMovieGenre('');
     setMovieActors('');
@@ -345,8 +367,8 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
 
   const commitMovieToStateAndSupabase = async (posterUrl: string, videoUrl: string) => {
     const title = movieTitle.trim();
-    const cleanGenre = movieGenre.trim();
-    const cleanLabel = editMovieId ? movieLabel.trim() : '';
+    const cleanGenre = parseMovieGenres(movieGenre).join(', ');
+    const cleanLabel = movieLabel.trim();
 
     updateState((prev) => {
       if (editMovieId) {
@@ -358,14 +380,15 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
                   ...m,
                   title,
                   year: movieYear.trim(),
+                  duration: movieDuration.trim(),
                   rating: movieRating.trim(),
                   category: cleanGenre,
                   genre: cleanGenre,
                   actors: movieActors.trim(),
                   label: cleanLabel,
                   description: movieDescription.trim(),
-                  poster: posterRemoved ? '' : posterUrl || m.poster,
-                  video: videoUrl || m.video,
+                  poster: posterRemoved ? '' : posterUrl || m.poster || '',
+                  video: videoUrl || m.video || '',
                 }
               : m
           ),
@@ -379,14 +402,15 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
             id: 'mov_' + Date.now(),
             title,
             year: movieYear.trim(),
+            duration: movieDuration.trim(),
             rating: movieRating.trim(),
             category: cleanGenre,
             genre: cleanGenre,
             actors: movieActors.trim(),
-            label: '',
+            label: cleanLabel,
             description: movieDescription.trim(),
-            poster: posterRemoved ? '' : posterUrl,
-            video: videoUrl,
+            poster: posterRemoved ? '' : posterUrl || '',
+            video: videoUrl || '',
             createdAt: Date.now(),
           },
         ],
@@ -463,8 +487,9 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
     setEditMovieId(m.id);
     setMovieTitle(m.title);
     setMovieYear(m.year || '');
+    setMovieDuration(m.duration || '');
     setMovieRating(m.rating || '');
-    setMovieGenre(m.genre || m.category || '');
+    setMovieGenre(parseMovieGenres(m.genre, m.category).join(', '));
     setMovieActors(m.actors || '');
     setMovieLabel(m.label || '');
     setMovieDescription(m.description || '');
@@ -475,7 +500,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
     setUploadedVideoRef(m.video || '');
     setMovieUploadReady(true);
     const resolvedPoster = await resolveMediaUrl(m.poster);
-    setMoviePosterPreview(resolvedPoster);
+    setMoviePosterPreview(resolvedPoster || (m.poster && !m.poster.startsWith('idb://') ? m.poster : ''));
     window.scrollTo({ top: 0, behavior: 'smooth' });
   };
 
@@ -607,6 +632,10 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
     setSeasonSeriesTitle('');
     setSeasonNumber('');
     setSeasonLabel('');
+    setSeasonYear('');
+    setSeasonDuration('');
+    setSeasonActors('');
+    setSeasonDescription('');
     setSeasonPosterLink('');
     setSeasonPosterPreview('');
     setSeasonPosterRemoved(false);
@@ -645,7 +674,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
       }
     }
 
-    const cleanSeasonLabel = editSeasonId ? seasonLabel.trim() : '';
+    const cleanSeasonLabel = seasonLabel.trim();
 
     updateState((prev) => {
       if (editSeasonId) {
@@ -658,6 +687,10 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
                   seriesTitle,
                   seasonNumber: sNum,
                   label: cleanSeasonLabel,
+                  year: seasonYear.trim(),
+                  duration: seasonDuration.trim(),
+                  actors: seasonActors.trim(),
+                  description: seasonDescription.trim(),
                   poster: seasonPosterRemoved ? '' : posterRef || s.poster,
                 }
               : s
@@ -672,7 +705,11 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
             id: 'sea_' + Date.now(),
             seriesTitle,
             seasonNumber: sNum,
-            label: '',
+            label: cleanSeasonLabel,
+            year: seasonYear.trim(),
+            duration: seasonDuration.trim(),
+            actors: seasonActors.trim(),
+            description: seasonDescription.trim(),
             poster: seasonPosterRemoved ? '' : posterRef || '',
           },
         ],
@@ -2025,7 +2062,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
                 />
               </div>
 
-              <div className="grid grid-cols-2 gap-3">
+              <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
                 <div>
                   <label className={labelCls}>Year</label>
                   <input
@@ -2033,6 +2070,16 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
                     value={movieYear}
                     onChange={(e) => setMovieYear(e.target.value)}
                     placeholder="2026"
+                    className={inputCls}
+                  />
+                </div>
+                <div>
+                  <label className={labelCls}>Duration / Time</label>
+                  <input
+                    type="text"
+                    value={movieDuration}
+                    onChange={(e) => setMovieDuration(e.target.value)}
+                    placeholder="e.g. 1h 45m"
                     className={inputCls}
                   />
                 </div>
@@ -2049,42 +2096,56 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
               </div>
 
               <div>
-                <label className={labelCls}>Genre (Select from 1-Line Genre List)</label>
-                <select
-                  value={movieGenre}
-                  onChange={(e) => setMovieGenre(e.target.value)}
-                  className={inputCls}
-                >
-                  <option value="">-- Select Genre --</option>
-                  {oneLineGenres.map((g) => (
-                    <option key={g} value={g}>
-                      {g}
-                    </option>
-                  ))}
-                  {movieGenre &&
-                    !oneLineGenres.some((g) => g.toLowerCase() === movieGenre.toLowerCase()) && (
-                      <option value={movieGenre}>{movieGenre}</option>
-                    )}
-                </select>
+                <label className={labelCls}>
+                  Genres (Multi-Select · Tap to Pick One or Many)
+                </label>
+                <div className="grid grid-cols-2 gap-2 rounded-lg border border-[#6a0dad]/60 bg-[#0a090f] p-2.5 sm:grid-cols-3">
+                  {availableMovieGenreChoices.map((g) => {
+                    const checked = selectedMovieGenres.some(
+                      (item) => item.toLowerCase() === g.toLowerCase()
+                    );
+                    return (
+                      <label
+                        key={g}
+                        className={`flex min-h-[38px] cursor-pointer items-center gap-2 rounded-md border px-2.5 py-1.5 text-xs font-bold transition-colors ${
+                          checked
+                            ? 'border-[#d4af37] bg-[#6a0dad]/70 text-[#f0cf65]'
+                            : 'border-white/10 bg-[#12101b] text-white/80 hover:border-[#6a0dad]'
+                        }`}
+                      >
+                        <input
+                          type="checkbox"
+                          checked={checked}
+                          onChange={() => toggleMovieGenre(g)}
+                          className="h-4 w-4 accent-[#d4af37]"
+                        />
+                        <span className="truncate">{g}</span>
+                      </label>
+                    );
+                  })}
+                </div>
+                {selectedMovieGenres.length > 0 && (
+                  <p className="mt-1.5 text-[11px] font-semibold text-[#f0cf65]">
+                    Selected: {selectedMovieGenres.join(' + ')}
+                  </p>
+                )}
               </div>
 
-              {editMovieId && (
-                <div>
-                  <label className={labelCls}>
-                    Poster Label (Optional) — e.g. VIP
-                  </label>
-                  <input
-                    type="text"
-                    value={movieLabel}
-                    onChange={(e) => setMovieLabel(e.target.value)}
-                    placeholder="e.g. VIP (leave empty for clean poster)"
-                    className={inputCls}
-                  />
-                </div>
-              )}
+              <div>
+                <label className={labelCls}>
+                  Poster Label (Optional) — e.g. VIP
+                </label>
+                <input
+                  type="text"
+                  value={movieLabel}
+                  onChange={(e) => setMovieLabel(e.target.value)}
+                  placeholder="e.g. VIP (leave empty for clean poster)"
+                  className={inputCls}
+                />
+              </div>
 
               <div>
-                <label className={labelCls}>Name of Actors</label>
+                <label className={labelCls}>Actors Names</label>
                 <input
                   type="text"
                   value={movieActors}
@@ -2148,9 +2209,15 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
                         referrerPolicy="no-referrer"
                         className="h-full w-full object-cover"
                       />
-                      {editMovieId && movieLabel.trim() && (
+                      {movieLabel.trim() && (
                         <div className="absolute left-1.5 top-1.5 flex max-w-[78%] flex-wrap gap-1">
-                          <span className="rounded border border-[#d4af37] bg-[#6a0dad] px-1.5 py-0.5 text-[8px] font-extrabold text-[#f0cf65]">
+                          <span
+                            className={
+                              movieLabel.trim().toUpperCase().includes('VIP')
+                                ? 'rounded border border-[#f0cf65] bg-gradient-to-r from-[#d4af37] to-[#f0cf65] px-1.5 py-0.5 text-[8px] font-black text-black'
+                                : 'rounded border border-[#d4af37] bg-[#6a0dad] px-1.5 py-0.5 text-[8px] font-extrabold text-[#f0cf65]'
+                            }
+                          >
                             {movieLabel.trim()}
                           </span>
                         </div>
@@ -2185,12 +2252,12 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
                   <input
                     ref={videoFileRef}
                     type="file"
-                    accept="video/*"
+                    accept="video/*,.mkv,.avi,.mov,.webm,.mp4,.m4v,.flv,.wmv,.3gp,.ts,.ogg,.ogv,.mpeg,.mpg"
                     onChange={(e) => handleVideoFileChange(e.target.files?.[0] || null)}
                     className="hidden"
                   />
                   <span className="text-xs text-[#b0aab8]">
-                    {selectedVideoFile?.name || videoFileRef.current?.files?.[0]?.name || 'Or paste video link below'}
+                    {selectedVideoFile?.name || videoFileRef.current?.files?.[0]?.name || 'Any format (MP4, MKV, AVI, MOV, WEBM) or paste link'}
                   </span>
                 </div>
                 <input
@@ -2498,28 +2565,67 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
                   className={inputCls}
                 />
               </div>
-              <div>
-                <label className={labelCls}>Season Number</label>
-                <input
-                  type="number"
-                  value={seasonNumber}
-                  onChange={(e) => setSeasonNumber(e.target.value)}
-                  placeholder="1"
-                  className={inputCls}
-                />
-              </div>
-              {editSeasonId && (
+              <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
                 <div>
-                  <label className={labelCls}>Poster Label (Optional) — e.g. VIP</label>
+                  <label className={labelCls}>Season Number</label>
                   <input
-                    type="text"
-                    value={seasonLabel}
-                    onChange={(e) => setSeasonLabel(e.target.value)}
-                    placeholder="e.g. VIP (leave empty for clean poster)"
+                    type="number"
+                    value={seasonNumber}
+                    onChange={(e) => setSeasonNumber(e.target.value)}
+                    placeholder="1"
                     className={inputCls}
                   />
                 </div>
-              )}
+                <div>
+                  <label className={labelCls}>Year</label>
+                  <input
+                    type="number"
+                    value={seasonYear}
+                    onChange={(e) => setSeasonYear(e.target.value)}
+                    placeholder="2026"
+                    className={inputCls}
+                  />
+                </div>
+                <div>
+                  <label className={labelCls}>Duration / Time</label>
+                  <input
+                    type="text"
+                    value={seasonDuration}
+                    onChange={(e) => setSeasonDuration(e.target.value)}
+                    placeholder="e.g. 45m per ep"
+                    className={inputCls}
+                  />
+                </div>
+              </div>
+              <div>
+                <label className={labelCls}>Actors Names</label>
+                <input
+                  type="text"
+                  value={seasonActors}
+                  onChange={(e) => setSeasonActors(e.target.value)}
+                  placeholder="e.g. Okello Moses, Akello Grace"
+                  className={inputCls}
+                />
+              </div>
+              <div>
+                <label className={labelCls}>Description</label>
+                <textarea
+                  value={seasonDescription}
+                  onChange={(e) => setSeasonDescription(e.target.value)}
+                  placeholder="Series description..."
+                  className={`${inputCls} min-h-[70px] resize-y`}
+                />
+              </div>
+              <div>
+                <label className={labelCls}>Poster Label (Optional) — e.g. VIP</label>
+                <input
+                  type="text"
+                  value={seasonLabel}
+                  onChange={(e) => setSeasonLabel(e.target.value)}
+                  placeholder="e.g. VIP (leave empty for clean poster)"
+                  className={inputCls}
+                />
+              </div>
               <div>
                 <label className={labelCls}>Series Poster (Direct Upload Button + Image Link)</label>
                 <div className="flex flex-wrap items-center gap-2">
@@ -2621,6 +2727,10 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
                           setSeasonSeriesTitle(s.seriesTitle);
                           setSeasonNumber(s.seasonNumber);
                           setSeasonLabel(s.label || '');
+                          setSeasonYear(s.year || '');
+                          setSeasonDuration(s.duration || '');
+                          setSeasonActors(s.actors || '');
+                          setSeasonDescription(s.description || '');
                           setSeasonPosterRemoved(false);
                           setSeasonPosterLink(
                             s.poster && !s.poster.startsWith('idb://') ? s.poster : ''
@@ -2729,7 +2839,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
                   <input
                     ref={episodeVideoFileRef}
                     type="file"
-                    accept="video/*"
+                    accept="video/*,.mkv,.avi,.mov,.webm,.mp4,.m4v,.flv,.wmv,.3gp,.ts,.ogg,.ogv,.mpeg,.mpg"
                     onChange={() => {
                       const f = episodeVideoFileRef.current?.files?.[0];
                       setEpisodeFileName(f ? f.name : '');
@@ -3501,7 +3611,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
                 Every new poster saved automatically includes Like, Share, and Comment buttons on the poster.
               </p>
               <div className="space-y-2.5 rounded-lg border border-[#6a0dad]/40 bg-[#09080f] p-3">
-                <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+                <div className="grid grid-cols-1 gap-2 sm:grid-cols-3">
                   <input
                     type="text"
                     value={movieTitle}
@@ -3516,48 +3626,62 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
                     placeholder="Year (e.g. 2026)"
                     className={inputCls}
                   />
+                  <input
+                    type="text"
+                    value={movieDuration}
+                    onChange={(e) => setMovieDuration(e.target.value)}
+                    placeholder="Duration / Time (e.g. 1h 45m)"
+                    className={inputCls}
+                  />
                 </div>
                 <div>
                   <label className="mb-1 block text-[11px] font-bold text-[#f0cf65]">
-                    Genre (from 1-line Genre List)
+                    Genres (Multi-Select · Tap to Pick One or Many)
                   </label>
-                  <select
-                    value={movieGenre}
-                    onChange={(e) => setMovieGenre(e.target.value)}
-                    className={inputCls}
-                  >
-                    <option value="">-- Select Genre --</option>
-                    {oneLineGenres.map((g) => (
-                      <option key={`set-gen-${g}`} value={g}>
-                        {g}
-                      </option>
-                    ))}
-                    {movieGenre &&
-                      !oneLineGenres.some((g) => g.toLowerCase() === movieGenre.toLowerCase()) && (
-                        <option value={movieGenre}>{movieGenre}</option>
-                      )}
-                  </select>
-                </div>
-                {editMovieId && (
-                  <div>
-                    <label className="mb-1 block text-[11px] font-bold text-[#f0cf65]">
-                      Poster Label (Optional) — e.g. VIP
-                    </label>
-                    <input
-                      type="text"
-                      value={movieLabel}
-                      onChange={(e) => setMovieLabel(e.target.value)}
-                      placeholder="e.g. VIP (leave empty for clean poster)"
-                      className={inputCls}
-                    />
+                  <div className="grid grid-cols-2 gap-1.5 rounded-lg border border-[#6a0dad]/50 bg-[#0a090f] p-2 sm:grid-cols-3">
+                    {availableMovieGenreChoices.map((g) => {
+                      const checked = selectedMovieGenres.some(
+                        (item) => item.toLowerCase() === g.toLowerCase()
+                      );
+                      return (
+                        <label
+                          key={`set-gen-${g}`}
+                          className={`flex min-h-[34px] cursor-pointer items-center gap-1.5 rounded-md border px-2 py-1 text-[11px] font-bold transition-colors ${
+                            checked
+                              ? 'border-[#d4af37] bg-[#6a0dad]/70 text-[#f0cf65]'
+                              : 'border-white/10 bg-[#12101b] text-white/80'
+                          }`}
+                        >
+                          <input
+                            type="checkbox"
+                            checked={checked}
+                            onChange={() => toggleMovieGenre(g)}
+                            className="h-3.5 w-3.5 accent-[#d4af37]"
+                          />
+                          <span className="truncate">{g}</span>
+                        </label>
+                      );
+                    })}
                   </div>
-                )}
+                </div>
+                <div>
+                  <label className="mb-1 block text-[11px] font-bold text-[#f0cf65]">
+                    Poster Label (Optional) — e.g. VIP
+                  </label>
+                  <input
+                    type="text"
+                    value={movieLabel}
+                    onChange={(e) => setMovieLabel(e.target.value)}
+                    placeholder="e.g. VIP (leave empty for clean poster)"
+                    className={inputCls}
+                  />
+                </div>
                 <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
                   <input
                     type="text"
                     value={movieActors}
                     onChange={(e) => setMovieActors(e.target.value)}
-                    placeholder="Name of Actors"
+                    placeholder="Actors Names"
                     className={inputCls}
                   />
                   <input
@@ -3618,7 +3742,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
                       <input
                         ref={settingsVideoFileRef}
                         type="file"
-                        accept="video/*"
+                        accept="video/*,.mkv,.avi,.mov,.webm,.mp4,.m4v,.flv,.wmv,.3gp,.ts,.ogg,.ogv,.mpeg,.mpg"
                         onChange={(e) => handleVideoFileChange(e.target.files?.[0] || null)}
                         className="hidden"
                       />
@@ -3645,9 +3769,15 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
                         referrerPolicy="no-referrer"
                         className="h-full w-full object-cover"
                       />
-                      {editMovieId && movieLabel.trim() && (
+                      {movieLabel.trim() && (
                         <div className="absolute left-1 top-1 flex max-w-[82%] flex-wrap gap-0.5">
-                          <span className="rounded border border-[#d4af37] bg-[#6a0dad] px-1 py-0.5 text-[7px] font-extrabold text-[#f0cf65]">
+                          <span
+                            className={
+                              movieLabel.trim().toUpperCase().includes('VIP')
+                                ? 'rounded border border-[#f0cf65] bg-gradient-to-r from-[#d4af37] to-[#f0cf65] px-1 py-0.5 text-[7px] font-black text-black'
+                                : 'rounded border border-[#d4af37] bg-[#6a0dad] px-1 py-0.5 text-[7px] font-extrabold text-[#f0cf65]'
+                            }
+                          >
                             {movieLabel.trim()}
                           </span>
                         </div>

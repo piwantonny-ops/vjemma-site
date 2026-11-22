@@ -37,6 +37,7 @@ export interface Movie {
   id: string;
   title: string;
   year: string;
+  duration?: string;
   rating: string;
   category: string;
   genre?: string;
@@ -62,6 +63,11 @@ export interface Season {
   seasonNumber: string;
   poster: string;
   label?: string;
+  year?: string;
+  duration?: string;
+  actors?: string;
+  description?: string;
+  genre?: string;
 }
 
 export interface Episode {

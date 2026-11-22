@@ -24,6 +24,25 @@ export function parseGenreLine(line?: string): string[] {
   return result;
 }
 
+export function parseMovieGenres(genre?: string, category?: string): string[] {
+  const combined = [genre || '', category || ''].filter(Boolean).join(',');
+  const result: string[] = [];
+  const seen = new Set<string>();
+  for (const part of combined.split(',')) {
+    const clean = part.trim();
+    if (!clean) continue;
+    const key = clean.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    result.push(clean);
+  }
+  return result;
+}
+
+export function isVipLabel(label?: string): boolean {
+  return (label || '').trim().toUpperCase().includes('VIP');
+}
+
 export const DB_KEY = 'vj_emma_truelight_v2';
 const IDB_NAME = 'vj_emma_media_store';
 const IDB_STORE = 'files';

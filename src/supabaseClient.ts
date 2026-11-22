@@ -45,6 +45,44 @@ interface SupabaseSiteSettingsRow {
 
 let cachedSiteSettingsBase: Record<string, unknown> = {};
 
+const DIRTY_MOVIES_KEY = 'vj_emma_dirty_movies_v1';
+const DELETED_MOVIES_KEY = 'vj_emma_deleted_movies_v1';
+const DIRTY_SETTINGS_KEY = 'vj_emma_dirty_settings_v1';
+
+function readIdList(key: string): string[] {
+  try {
+    const raw = localStorage.getItem(key);
+    const parsed = raw ? JSON.parse(raw) : [];
+    return Array.isArray(parsed) ? parsed.map(String) : [];
+  } catch {
+    return [];
+  }
+}
+
+function writeIdList(key: string, ids: string[]): void {
+  try {
+    if (ids.length === 0) {
+      localStorage.removeItem(key);
+    } else {
+      localStorage.setItem(key, JSON.stringify(Array.from(new Set(ids))));
+    }
+  } catch {
+    // Ignore storage quota issues
+  }
+}
+
+function isRlsPolicyError(err?: { code?: string; message?: string } | null): boolean {
+  if (!err) return false;
+  const code = String(err.code || '').trim();
+  const msg = String(err.message || '');
+  return (
+    code === '42501' ||
+    /row-level security/i.test(msg) ||
+    /violates row-level security/i.test(msg) ||
+    /permission denied/i.test(msg)
+  );
+}
+
 function mapRowToMovie(row: SupabaseMovieRow): Movie | null {
   if (!row || !row.id) return null;
   const d = (row.data && typeof row.data === 'object' ? row.data : {}) as Record<string, unknown>;
@@ -62,6 +100,7 @@ function mapRowToMovie(row: SupabaseMovieRow): Movie | null {
     id: String(row.id),
     title,
     year: d.year !== undefined && d.year !== null ? String(d.year) : '',
+    duration: typeof d.duration === 'string' ? d.duration : '',
     rating: d.rating !== undefined && d.rating !== null ? String(d.rating) : '',
     category: rawCategory,
     genre: rawGenre,
@@ -93,6 +132,7 @@ function mapMovieToSupabasePayload(movie: Movie): {
       id: movie.id,
       title: movie.title,
       year: movie.year || '',
+      duration: movie.duration || '',
       rating: movie.rating || '',
       category: movie.category || '',
       genre: movie.genre || movie.category || '',
@@ -107,7 +147,6 @@ function mapMovieToSupabasePayload(movie: Movie): {
       featured: true,
       completed: true,
       seasons: [],
-      duration: '',
       trailerUrl: '',
       createdAt: movie.createdAt || Date.now(),
     },
@@ -175,15 +214,59 @@ export async function fetchSupabasePublicState(
     if (!moviesRes.error && Array.isArray(moviesRes.data)) {
       const remoteMovies = (moviesRes.data as SupabaseMovieRow[])
         .map(mapRowToMovie)
-        .filter((m): m is Movie => Boolean(m))
-        .sort((a, b) => a.createdAt - b.createdAt);
+        .filter((m): m is Movie => Boolean(m));
 
       if (remoteMovies.length > 0) {
-        patch.movies = remoteMovies;
+        const dirtySet = new Set(readIdList(DIRTY_MOVIES_KEY));
+        const deletedSet = new Set(readIdList(DELETED_MOVIES_KEY));
+        const localById = new Map(currentState.movies.map((m) => [m.id, m]));
+        const mergedMap = new Map<string, Movie>();
+
+        for (const remote of remoteMovies) {
+          if (deletedSet.has(remote.id)) continue;
+          const local = localById.get(remote.id);
+          if (local && dirtySet.has(remote.id)) {
+            mergedMap.set(remote.id, {
+              ...remote,
+              ...local,
+              poster: local.poster || remote.poster,
+              video: local.video || remote.video,
+            });
+          } else if (local) {
+            mergedMap.set(remote.id, {
+              ...remote,
+              poster: remote.poster || local.poster,
+              video: remote.video || local.video,
+              label: remote.label || local.label,
+              duration: remote.duration || local.duration,
+            });
+          } else {
+            mergedMap.set(remote.id, remote);
+          }
+        }
+
+        for (const local of currentState.movies) {
+          if (deletedSet.has(local.id)) continue;
+          if (
+            !mergedMap.has(local.id) &&
+            (dirtySet.has(local.id) || (local.id.startsWith('mov_') && !local.id.startsWith('mov_sample_')))
+          ) {
+            mergedMap.set(local.id, local);
+          }
+        }
+
+        patch.movies = Array.from(mergedMap.values()).sort((a, b) => a.createdAt - b.createdAt);
       }
     }
 
-    if (!settingsRes.error && settingsRes.data) {
+    let hasDirtySettings = false;
+    try {
+      hasDirtySettings = localStorage.getItem(DIRTY_SETTINGS_KEY) === '1';
+    } catch {
+      hasDirtySettings = false;
+    }
+
+    if (!settingsRes.error && settingsRes.data && !hasDirtySettings) {
       const row = settingsRes.data as SupabaseSiteSettingsRow;
       const val = (row.value && typeof row.value === 'object' ? row.value : {}) as Record<
         string,
@@ -331,9 +414,10 @@ export async function fetchSupabasePublicState(
 export async function syncStateChangesToSupabase(
   prev: AppState,
   next: AppState
-): Promise<{ ok: boolean; error?: string }> {
+): Promise<{ ok: boolean; error?: string; localOnly?: boolean }> {
   try {
-    const tasks: PromiseLike<{ error: { message: string } | null }>[] = [];
+    const tasks: PromiseLike<{ error: { code?: string; message: string } | null }>[] = [];
+    let hadRlsFallback = false;
 
     if (prev.movies !== next.movies) {
       const prevMap = new Map(prev.movies.map((m) => [m.id, m]));
@@ -346,13 +430,39 @@ export async function syncStateChangesToSupabase(
 
       const deletedIds = prev.movies.filter((m) => !nextIds.has(m.id)).map((m) => m.id);
 
+      const dirtyNow = new Set(readIdList(DIRTY_MOVIES_KEY));
+      const deletedNow = new Set(readIdList(DELETED_MOVIES_KEY));
+
+      for (const m of changedOrAdded) {
+        dirtyNow.add(m.id);
+        deletedNow.delete(m.id);
+      }
+      for (const delId of deletedIds) {
+        deletedNow.add(delId);
+        dirtyNow.delete(delId);
+      }
+
+      writeIdList(DIRTY_MOVIES_KEY, Array.from(dirtyNow));
+      writeIdList(DELETED_MOVIES_KEY, Array.from(deletedNow));
+
       if (changedOrAdded.length > 0) {
         const payloads = changedOrAdded.map(mapMovieToSupabasePayload);
         tasks.push(
           supabase
             .from('movies')
             .upsert(payloads, { onConflict: 'id' })
-            .then((res) => ({ error: res.error }))
+            .then((res) => {
+              if (!res.error) {
+                const remainingDirty = readIdList(DIRTY_MOVIES_KEY).filter(
+                  (id) => !changedOrAdded.some((m) => m.id === id)
+                );
+                writeIdList(DIRTY_MOVIES_KEY, remainingDirty);
+              } else if (isRlsPolicyError(res.error)) {
+                hadRlsFallback = true;
+                return { error: null };
+              }
+              return { error: res.error };
+            })
         );
       }
 
@@ -362,7 +472,18 @@ export async function syncStateChangesToSupabase(
             .from('movies')
             .delete()
             .in('id', deletedIds)
-            .then((res) => ({ error: res.error }))
+            .then((res) => {
+              if (!res.error) {
+                const remainingDeleted = readIdList(DELETED_MOVIES_KEY).filter(
+                  (id) => !deletedIds.includes(id)
+                );
+                writeIdList(DELETED_MOVIES_KEY, remainingDeleted);
+              } else if (isRlsPolicyError(res.error)) {
+                hadRlsFallback = true;
+                return { error: null };
+              }
+              return { error: res.error };
+            })
         );
       }
     }
@@ -379,6 +500,11 @@ export async function syncStateChangesToSupabase(
       prev.comments !== next.comments;
 
     if (publicSettingsChanged) {
+      try {
+        localStorage.setItem(DIRTY_SETTINGS_KEY, '1');
+      } catch {
+        // Ignore
+      }
       const existingLegacySettings =
         cachedSiteSettingsBase.settings && typeof cachedSiteSettingsBase.settings === 'object'
           ? (cachedSiteSettingsBase.settings as Record<string, unknown>)
@@ -419,7 +545,19 @@ export async function syncStateChangesToSupabase(
             },
             { onConflict: 'key' }
           )
-          .then((res) => ({ error: res.error }))
+          .then((res) => {
+            if (!res.error) {
+              try {
+                localStorage.removeItem(DIRTY_SETTINGS_KEY);
+              } catch {
+                // Ignore
+              }
+            } else if (isRlsPolicyError(res.error)) {
+              hadRlsFallback = true;
+              return { error: null };
+            }
+            return { error: res.error };
+          })
       );
     }
 
@@ -430,7 +568,7 @@ export async function syncStateChangesToSupabase(
     if (failed?.error) {
       return { ok: false, error: failed.error.message };
     }
-    return { ok: true };
+    return { ok: true, localOnly: hadRlsFallback };
   } catch (err) {
     return { ok: false, error: err instanceof Error ? err.message : 'Supabase sync failed' };
   }

@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react';
-import { ChevronLeft, ChevronRight, Film, Heart, Lock, MessageCircle, Play, Radio, Share2 } from 'lucide-react';
-import { getSocialPlatformItems, normalizeSocialUrl, parseGenreLine, useResolvedMedia } from '../storage';
+import { ChevronLeft, ChevronRight, Download, Film, Heart, Info, Lock, MessageCircle, Play, Radio, Share2 } from 'lucide-react';
+import { getSocialPlatformItems, isVipLabel, normalizeSocialUrl, parseGenreLine, parseMovieGenres, useResolvedMedia } from '../storage';
 import { PWAInstallButton } from './PWAInstallButton';
 import type {
   AppSettings,
@@ -235,6 +235,7 @@ interface MovieCardProps {
   isAdmin: boolean;
   isSubscribed: boolean;
   onWatch: (id: string) => void;
+  onOpenDetails?: (id: string) => void;
   onLike: (id: string) => void;
   onShare: (id: string) => void;
   onOpenComments: (id: string) => void;
@@ -251,6 +252,7 @@ const MovieCard: React.FC<MovieCardProps> = ({
   isAdmin,
   isSubscribed,
   onWatch,
+  onOpenDetails,
   onLike,
   onShare,
   onOpenComments,
@@ -270,32 +272,53 @@ const MovieCard: React.FC<MovieCardProps> = ({
     .split(',')
     .map((t) => t.trim())
     .filter(Boolean);
-  const isVipMovie = tagsList.some((t) => t.toUpperCase() === 'VIP');
+  const isVipMovie = isVipLabel(movie.label);
   const isVipLocked = isVipMovie && !isSubscribed && !isAdmin;
+  const movieGenres = parseMovieGenres(movie.genre, movie.category);
+  const yearAndDuration = [showYear ? movie.year : '', movie.duration].filter(Boolean).join(' · ');
+
+  const handlePosterTap = () => {
+    if (isVipLocked) {
+      onWatch(movie.id);
+      return;
+    }
+    if (onOpenDetails) {
+      onOpenDetails(movie.id);
+    } else {
+      onWatch(movie.id);
+    }
+  };
 
   return (
     <article className="group flex flex-col overflow-hidden rounded-xl border border-[#6a0dad]/60 bg-[#110e1a] shadow-lg transition-colors hover:border-[#d4af37]">
       <div className="relative aspect-[2/3] w-full overflow-hidden bg-[#181228]">
-        {posterSrc ? (
-          <img
-            src={posterSrc}
-            alt={movie.title}
-            referrerPolicy="no-referrer"
-            className="block h-full w-full object-cover transition-transform duration-300 group-hover:scale-[1.03]"
-          />
-        ) : (
-          <div className="flex h-full w-full flex-col items-center justify-center gap-2 bg-gradient-to-b from-[#2b0c4e] via-[#150b24] to-[#08060c] p-4 text-center">
-            <Film className="h-9 w-9 text-[#d4af37]" />
-            <span className="font-display text-xs font-bold text-white line-clamp-2">{movie.title}</span>
-          </div>
-        )}
+        <button
+          type="button"
+          onClick={handlePosterTap}
+          aria-label={`Open ${movie.title}`}
+          className="block h-full w-full text-left"
+        >
+          {posterSrc ? (
+            <img
+              src={posterSrc}
+              alt={movie.title}
+              referrerPolicy="no-referrer"
+              className="block h-full w-full object-cover transition-transform duration-300 group-hover:scale-[1.03]"
+            />
+          ) : (
+            <div className="flex h-full w-full flex-col items-center justify-center gap-2 bg-gradient-to-b from-[#2b0c4e] via-[#150b24] to-[#08060c] p-4 text-center">
+              <Film className="h-9 w-9 text-[#d4af37]" />
+              <span className="font-display text-xs font-bold text-white line-clamp-2">{movie.title}</span>
+            </div>
+          )}
+        </button>
 
-        {/* Top Scrim + Optional Poster Label (only shown if set in Edit Page) & Rating */}
+        {/* Top Scrim + Optional Poster Label / GOLD VIP Badge & Rating */}
         <div className="pointer-events-none absolute inset-x-0 top-0 h-16 bg-gradient-to-b from-black/80 to-transparent" />
-        {showLabel && tagsList.length > 0 && (
-          <div className="absolute left-2 top-2 flex max-w-[72%] flex-wrap gap-1">
+        {(isVipMovie || (showLabel && tagsList.length > 0)) && (
+          <div className="pointer-events-none absolute left-2 top-2 flex max-w-[72%] flex-wrap gap-1">
             {tagsList.slice(0, 3).map((tag) => {
-              const isVipTag = tag.toUpperCase() === 'VIP';
+              const isVipTag = tag.toUpperCase().includes('VIP');
               return (
                 <span
                   key={tag}
@@ -313,7 +336,7 @@ const MovieCard: React.FC<MovieCardProps> = ({
           </div>
         )}
         {showRating && movie.rating && (
-          <span className="absolute right-2 top-2 rounded bg-black/85 border border-[#d4af37]/50 px-1.5 py-0.5 text-[11px] font-extrabold text-[#d4af37] tabular-nums">
+          <span className="pointer-events-none absolute right-2 top-2 rounded bg-black/85 border border-[#d4af37]/50 px-1.5 py-0.5 text-[11px] font-extrabold text-[#d4af37] tabular-nums">
             ★ {movie.rating}
           </span>
         )}
@@ -334,11 +357,33 @@ const MovieCard: React.FC<MovieCardProps> = ({
       </div>
 
       <div className="flex flex-1 flex-col gap-1.5 p-3">
-        <h3 className="font-display text-sm font-semibold leading-snug text-white line-clamp-2">
-          {movie.title}
-        </h3>
-        {showYear && movie.year && (
-          <div className="text-[11px] font-medium text-[#f0cf65] tabular-nums">{movie.year}</div>
+        <button
+          type="button"
+          onClick={() => (onOpenDetails ? onOpenDetails(movie.id) : onWatch(movie.id))}
+          className="text-left"
+        >
+          <h3 className="font-display text-sm font-semibold leading-snug text-white line-clamp-2 hover:text-[#f0cf65] transition-colors">
+            {movie.title}
+          </h3>
+        </button>
+
+        {yearAndDuration && (
+          <div className="text-[11px] font-medium text-[#f0cf65] tabular-nums">
+            {yearAndDuration}
+          </div>
+        )}
+
+        {movieGenres.length > 0 && (
+          <div className="flex flex-wrap gap-1">
+            {movieGenres.map((g) => (
+              <span
+                key={g}
+                className="rounded border border-[#6a0dad]/60 bg-[#1a112a] px-1.5 py-0.5 text-[10px] font-semibold text-[#e6dcf5]"
+              >
+                {g}
+              </span>
+            ))}
+          </div>
         )}
 
         {showActors && movie.actors && (
@@ -353,23 +398,35 @@ const MovieCard: React.FC<MovieCardProps> = ({
           </p>
         )}
 
-        <button
-          type="button"
-          onClick={() => onWatch(movie.id)}
-          className="mt-auto flex min-h-[44px] w-full items-center justify-center gap-1.5 rounded-lg bg-gradient-to-r from-[#d4af37] via-[#f0cf65] to-[#d4af37] px-3 py-2 text-xs font-bold tracking-normal text-black shadow transition-transform active:scale-[0.98]"
-        >
-          {isVipLocked ? (
-            <>
-              <Lock className="h-3.5 w-3.5" />
-              <span>VIP · Pay to Watch</span>
-            </>
-          ) : (
-            <>
-              <Play className="h-3.5 w-3.5 fill-current" />
-              <span>Watch Now</span>
-            </>
+        <div className="mt-auto flex items-center gap-1.5 pt-1">
+          <button
+            type="button"
+            onClick={() => onWatch(movie.id)}
+            className="flex min-h-[42px] flex-1 items-center justify-center gap-1.5 rounded-lg bg-gradient-to-r from-[#d4af37] via-[#f0cf65] to-[#d4af37] px-2.5 py-2 text-xs font-bold tracking-normal text-black shadow transition-transform active:scale-[0.98]"
+          >
+            {isVipLocked ? (
+              <>
+                <Lock className="h-3.5 w-3.5 shrink-0" />
+                <span className="truncate">VIP · Pay to Watch</span>
+              </>
+            ) : (
+              <>
+                <Play className="h-3.5 w-3.5 shrink-0 fill-current" />
+                <span>Watch</span>
+              </>
+            )}
+          </button>
+          {onOpenDetails && (
+            <button
+              type="button"
+              onClick={() => onOpenDetails(movie.id)}
+              aria-label={`Details for ${movie.title}`}
+              className="flex min-h-[42px] shrink-0 items-center justify-center rounded-lg border border-[#6a0dad] bg-[#171126] px-2.5 py-2 text-[11px] font-bold text-[#f0cf65] hover:border-[#d4af37]"
+            >
+              <Info className="h-3.5 w-3.5" />
+            </button>
           )}
-        </button>
+        </div>
 
         {isAdmin && (
           <div className="grid grid-cols-2 gap-1.5 pt-1">
@@ -400,6 +457,7 @@ interface MoviesGridProps {
   state: AppState;
   isSubscribed?: boolean;
   onWatch: (id: string) => void;
+  onOpenDetails?: (id: string) => void;
   onLike: (id: string) => void;
   onShare: (id: string) => void;
   onOpenComments: (id: string) => void;
@@ -413,6 +471,7 @@ const MoviesGrid: React.FC<MoviesGridProps> = ({
   state,
   isSubscribed = false,
   onWatch,
+  onOpenDetails,
   onLike,
   onShare,
   onOpenComments,
@@ -443,6 +502,7 @@ const MoviesGrid: React.FC<MoviesGridProps> = ({
             isAdmin={state.isAdminLoggedIn}
             isSubscribed={isSubscribed}
             onWatch={onWatch}
+            onOpenDetails={onOpenDetails}
             onLike={onLike}
             onShare={onShare}
             onOpenComments={onOpenComments}
@@ -577,6 +637,7 @@ interface HomeViewProps {
   state: AppState;
   isSubscribed?: boolean;
   onWatchMovie: (id: string) => void;
+  onOpenMovieDetails?: (id: string) => void;
   onLikeMovie: (id: string) => void;
   onShareMovie: (id: string) => void;
   onOpenComments: (id: string) => void;
@@ -591,6 +652,7 @@ export const HomeView: React.FC<HomeViewProps> = ({
   state,
   isSubscribed = false,
   onWatchMovie,
+  onOpenMovieDetails,
   onLikeMovie,
   onShareMovie,
   onOpenComments,
@@ -633,6 +695,7 @@ export const HomeView: React.FC<HomeViewProps> = ({
           state={state}
           isSubscribed={isSubscribed}
           onWatch={onWatchMovie}
+          onOpenDetails={onOpenMovieDetails}
           onLike={onLikeMovie}
           onShare={onShareMovie}
           onOpenComments={onOpenComments}
@@ -651,6 +714,7 @@ export const HomeView: React.FC<HomeViewProps> = ({
           state={state}
           isSubscribed={isSubscribed}
           onWatch={onWatchMovie}
+          onOpenDetails={onOpenMovieDetails}
           onLike={onLikeMovie}
           onShare={onShareMovie}
           onOpenComments={onOpenComments}
@@ -675,6 +739,7 @@ interface MoviesViewProps {
   state: AppState;
   isSubscribed?: boolean;
   onWatchMovie: (id: string) => void;
+  onOpenMovieDetails?: (id: string) => void;
   onLikeMovie: (id: string) => void;
   onShareMovie: (id: string) => void;
   onOpenComments: (id: string) => void;
@@ -688,6 +753,7 @@ export const MoviesView: React.FC<MoviesViewProps> = ({
   state,
   isSubscribed = false,
   onWatchMovie,
+  onOpenMovieDetails,
   onLikeMovie,
   onShareMovie,
   onOpenComments,
@@ -704,18 +770,16 @@ export const MoviesView: React.FC<MoviesViewProps> = ({
   const filteredMovies = [...state.movies].reverse().filter((m) => {
     if (selectedGenre === 'ALL') return true;
     const sel = selectedGenre.toLowerCase();
-    const g = (m.genre || '').toLowerCase();
-    const c = (m.category || '').toLowerCase();
-    const tags = (m.label || '')
-      .split(',')
-      .map((t) => t.trim().toLowerCase())
-      .filter(Boolean);
+    const movieGenres = parseMovieGenres(m.genre, m.category).map((g) => g.toLowerCase());
 
-    if (g === sel || c === sel) return true;
-    if (sel === 'christian' && (c.includes('christian') || g.includes('christian') || g.includes('faith'))) {
+    if (movieGenres.includes(sel)) return true;
+    if (
+      sel === 'christian' &&
+      movieGenres.some((g) => g.includes('christian') || g.includes('faith') || g.includes('gospel'))
+    ) {
       return true;
     }
-    if (sel === 'vip movies' && tags.includes('vip')) {
+    if (sel === 'vip movies' && isVipLabel(m.label)) {
       return true;
     }
     return false;
@@ -752,6 +816,7 @@ export const MoviesView: React.FC<MoviesViewProps> = ({
           state={state}
           isSubscribed={isSubscribed}
           onWatch={onWatchMovie}
+          onOpenDetails={onOpenMovieDetails}
           onLike={onLikeMovie}
           onShare={onShareMovie}
           onOpenComments={onOpenComments}
@@ -797,7 +862,11 @@ interface SeriesViewProps {
   seasons: Season[];
   episodes: Episode[];
   socialLinksRaw: string;
+  isSubscribed?: boolean;
   onWatchEpisode: (id: string) => void;
+  onDownloadEpisode?: (id: string) => void;
+  onOpenSeasonDetails?: (id: string) => void;
+  onTapLockedVipSeason?: (season: Season) => void;
   onLike: (id: string) => void;
   onShare: (id: string) => void;
   onOpenComments: (id: string) => void;
@@ -809,8 +878,12 @@ export const SeriesView: React.FC<SeriesViewProps> = ({
   state,
   seasons,
   episodes,
-  socialLinksRaw,
+  socialLinksRaw: _socialLinksRaw,
+  isSubscribed = false,
   onWatchEpisode,
+  onDownloadEpisode,
+  onOpenSeasonDetails,
+  onTapLockedVipSeason,
   onLike,
   onShare,
   onOpenComments,
@@ -839,6 +912,8 @@ export const SeriesView: React.FC<SeriesViewProps> = ({
               const likeInfo = state.likes[s.id] || { count: 0, liked: false };
               const commentsCount = (state.comments[s.id] || []).length;
               const seasonTitle = `${s.seriesTitle} - Season ${s.seasonNumber}`;
+              const isVipSeason = isVipLabel(s.label);
+              const isVipLocked = isVipSeason && !isSubscribed && !state.isAdminLoggedIn;
 
               return (
                 <div
@@ -847,16 +922,30 @@ export const SeriesView: React.FC<SeriesViewProps> = ({
                 >
                   <div className="flex flex-col gap-4 sm:flex-row">
                     <div className="relative aspect-[2/3] w-44 shrink-0 self-center overflow-hidden rounded-xl border border-[#d4af37]/60 bg-[#181228] sm:w-44 sm:self-start">
-                      <SeasonPoster posterRef={s.poster} title={s.seriesTitle} />
+                      <button
+                        type="button"
+                        onClick={() => {
+                          if (isVipLocked && onTapLockedVipSeason) {
+                            onTapLockedVipSeason(s);
+                          } else {
+                            onOpenSeasonDetails?.(s.id);
+                          }
+                        }}
+                        aria-label={`Open ${seasonTitle}`}
+                        className="block h-full w-full"
+                      >
+                        <SeasonPoster posterRef={s.poster} title={s.seriesTitle} />
+                      </button>
                       {(s.label || '').trim() && (
                         <span
                           className={
-                            (s.label || '').trim().toUpperCase().includes('VIP')
-                              ? 'absolute left-2 top-2 inline-flex items-center gap-0.5 rounded border border-[#f0cf65] bg-gradient-to-r from-[#d4af37] to-[#f0cf65] px-1.5 py-0.5 text-[9px] font-black uppercase tracking-wider text-black shadow'
-                              : 'absolute left-2 top-2 rounded border border-[#d4af37] bg-[#6a0dad]/95 px-2 py-0.5 text-[9px] font-extrabold uppercase tracking-wider text-[#f0cf65] shadow'
+                            isVipSeason
+                              ? 'pointer-events-none absolute left-2 top-2 inline-flex items-center gap-0.5 rounded border border-[#f0cf65] bg-gradient-to-r from-[#d4af37] to-[#f0cf65] px-1.5 py-0.5 text-[9px] font-black uppercase tracking-wider text-black shadow'
+                              : 'pointer-events-none absolute left-2 top-2 rounded border border-[#d4af37] bg-[#6a0dad]/95 px-2 py-0.5 text-[9px] font-extrabold uppercase tracking-wider text-[#f0cf65] shadow'
                           }
                         >
-                          {(s.label || '').trim()}
+                          {isVipSeason && isVipLocked && <Lock className="h-2.5 w-2.5" />}
+                          <span>{(s.label || '').trim()}</span>
                         </span>
                       )}
                       {showSocial && (
@@ -874,13 +963,43 @@ export const SeriesView: React.FC<SeriesViewProps> = ({
                     </div>
 
                     <div className="min-w-0 flex-1">
-                      <div className="mb-3">
-                        <h3 className="font-display text-base font-semibold text-[#d4af37]">
-                          {s.seriesTitle}
-                        </h3>
-                        <p className="text-xs font-medium text-white">
-                          Season {s.seasonNumber} · {seasonEpisodes.length} Episode(s)
-                        </p>
+                      <div className="mb-3 flex flex-wrap items-start justify-between gap-2">
+                        <div>
+                          <button
+                            type="button"
+                            onClick={() => onOpenSeasonDetails?.(s.id)}
+                            className="text-left"
+                          >
+                            <h3 className="font-display text-base font-semibold text-[#d4af37] hover:underline">
+                              {s.seriesTitle}
+                            </h3>
+                          </button>
+                          <p className="text-xs font-medium text-white">
+                            Season {s.seasonNumber} · {seasonEpisodes.length} Episode(s)
+                            {s.year ? ` · ${s.year}` : ''}
+                            {s.duration ? ` · ${s.duration}` : ''}
+                          </p>
+                          {s.actors && (
+                            <p className="mt-1 text-[11px] text-[#e0d8ef]">
+                              <span className="font-semibold text-white">Actors:</span> {s.actors}
+                            </p>
+                          )}
+                          {s.description && (
+                            <p className="mt-1 text-[11px] leading-snug text-[#b0aab8] line-clamp-2">
+                              {s.description}
+                            </p>
+                          )}
+                        </div>
+                        {onOpenSeasonDetails && (
+                          <button
+                            type="button"
+                            onClick={() => onOpenSeasonDetails(s.id)}
+                            className="inline-flex min-h-[34px] items-center gap-1 rounded-md border border-[#6a0dad] bg-[#171126] px-2.5 py-1 text-[11px] font-bold text-[#f0cf65]"
+                          >
+                            <Info className="h-3.5 w-3.5" />
+                            <span>Details</span>
+                          </button>
+                        )}
                       </div>
 
                       {seasonEpisodes.length === 0 ? (
@@ -890,18 +1009,32 @@ export const SeriesView: React.FC<SeriesViewProps> = ({
                           {seasonEpisodes.map((ep) => (
                             <div
                               key={ep.id}
-                              className="flex items-center justify-between gap-3 rounded-lg border border-[#6a0dad]/45 bg-[#09070f] px-3 py-2.5"
+                              className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-[#6a0dad]/45 bg-[#09070f] px-3 py-2.5"
                             >
                               <div className="text-sm font-medium text-white">
                                 Ep {ep.episodeNumber}: {ep.title}
                               </div>
-                              <button
-                                type="button"
-                                onClick={() => onWatchEpisode(ep.id)}
-                                className="min-h-[40px] shrink-0 rounded-lg bg-gradient-to-r from-[#d4af37] to-[#f0cf65] px-4 py-2 text-xs font-bold text-black"
-                              >
-                                Watch
-                              </button>
+                              <div className="flex items-center gap-2">
+                                <button
+                                  type="button"
+                                  onClick={() => onWatchEpisode(ep.id)}
+                                  className="inline-flex min-h-[40px] shrink-0 items-center gap-1 rounded-lg bg-gradient-to-r from-[#d4af37] to-[#f0cf65] px-4 py-2 text-xs font-bold text-black"
+                                >
+                                  {isVipLocked && <Lock className="h-3.5 w-3.5" />}
+                                  <span>{isVipLocked ? 'VIP Watch' : 'Watch'}</span>
+                                </button>
+                                {onDownloadEpisode && (
+                                  <button
+                                    type="button"
+                                    onClick={() => onDownloadEpisode(ep.id)}
+                                    aria-label={`Download ${ep.title}`}
+                                    className="inline-flex min-h-[40px] shrink-0 items-center gap-1 rounded-lg border border-[#d4af37] bg-[#6a0dad] px-3 py-2 text-xs font-bold text-white"
+                                  >
+                                    {isVipLocked ? <Lock className="h-3.5 w-3.5" /> : <Download className="h-3.5 w-3.5" />}
+                                    <span>Download</span>
+                                  </button>
+                                )}
+                              </div>
                             </div>
                           ))}
                         </div>
@@ -1088,6 +1221,7 @@ interface SearchViewProps {
   state: AppState;
   isSubscribed?: boolean;
   onWatchMovie: (id: string) => void;
+  onOpenMovieDetails?: (id: string) => void;
   onWatchEpisode: (id: string) => void;
   onLikeMovie: (id: string) => void;
   onShareMovie: (id: string) => void;
@@ -1100,6 +1234,7 @@ export const SearchView: React.FC<SearchViewProps> = ({
   state,
   isSubscribed = false,
   onWatchMovie,
+  onOpenMovieDetails,
   onWatchEpisode,
   onLikeMovie,
   onShareMovie,
@@ -1159,6 +1294,7 @@ export const SearchView: React.FC<SearchViewProps> = ({
             state={state}
             isSubscribed={isSubscribed}
             onWatch={onWatchMovie}
+            onOpenDetails={onOpenMovieDetails}
             onLike={onLikeMovie}
             onShare={onShareMovie}
             onOpenComments={onOpenComments}

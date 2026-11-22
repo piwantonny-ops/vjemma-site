@@ -7,18 +7,21 @@ import {
   AuthModal,
   CommentsModal,
   InfoModal,
+  MovieDetailsModal,
   PaymentSuccessPage,
   PENDING_PESAPAL_ORDER_KEY,
   PendingPesapalOrder,
   PesapalModal,
   PlansModal,
   PlayerModal,
+  VipPaymentPopupModal,
   WorkerStatusResponse,
 } from './components/Modals';
 import { OfflineIndicator } from './components/PWAInstallButton';
 import {
   BRAND_LOGO_URL,
   DB_KEY,
+  isVipLabel,
   LIVE_SYNC_CHANNEL,
   loadState,
   LOCKED_ADMIN_EMAIL,
@@ -31,7 +34,7 @@ import {
   subscribeToSupabasePublicChanges,
   syncStateChangesToSupabase,
 } from './supabaseClient';
-import type { AppState, AppView, InfoModalType, LiveTvChannel, PendingPlan, PlayerMedia } from './types';
+import type { AppState, AppView, InfoModalType, LiveTvChannel, PendingPlan, PlayerMedia, Season } from './types';
 
 const PROCESSED_PESAPAL_ORDERS_KEY = 'vj_emma_processed_pesapal_orders';
 
@@ -48,8 +51,13 @@ export default function App() {
 
   const [authModalOpen, setAuthModalOpen] = useState(false);
   const [pendingPlansAfterAuth, setPendingPlansAfterAuth] = useState(false);
+  const [pendingVipTitle, setPendingVipTitle] = useState<string | undefined>(undefined);
   const [plansModalOpen, setPlansModalOpen] = useState(false);
+  const [vipPopupOpen, setVipPopupOpen] = useState(false);
+  const [vipPopupTitle, setVipPopupTitle] = useState<string | undefined>(undefined);
   const [pendingPlan, setPendingPlan] = useState<PendingPlan | null>(null);
+  const [detailsMovieId, setDetailsMovieId] = useState<string | null>(null);
+  const [detailsSeasonId, setDetailsSeasonId] = useState<string | null>(null);
   const [activePlayerMedia, setActivePlayerMedia] = useState<PlayerMedia | null>(null);
   const [commentsMovieId, setCommentsMovieId] = useState<string | null>(null);
   const [infoModalType, setInfoModalType] = useState<InfoModalType | null>(null);
@@ -391,7 +399,9 @@ export default function App() {
     });
 
     const openPlansNow = pendingPlansAfterAuth;
+    const queuedVipTitle = pendingVipTitle;
     setPendingPlansAfterAuth(false);
+    setPendingVipTitle(undefined);
     setAuthModalOpen(false);
     showToast('Signed in successfully.');
 
@@ -399,6 +409,9 @@ export default function App() {
       if (signedInRecordPending) {
         showToast('Your WhatsApp payment is pending Admin approval.');
         switchView('profile');
+      } else if (queuedVipTitle) {
+        setVipPopupTitle(queuedVipTitle);
+        setVipPopupOpen(true);
       } else {
         setPlansModalOpen(true);
       }
@@ -412,7 +425,9 @@ export default function App() {
       isAdminLoggedIn: false,
     }));
     setPendingPlansAfterAuth(false);
+    setPendingVipTitle(undefined);
     setPlansModalOpen(false);
+    setVipPopupOpen(false);
     setPendingPlan(null);
     showToast('Signed out.');
     setCurrentView('home');
@@ -591,13 +606,14 @@ export default function App() {
     []
   );
 
-  const handleManualWhatsappPayment = (
+  const recordWhatsappOrder = (
+    planObj: PendingPlan,
     phone: string,
     email: string,
     method: string,
     name?: string
   ) => {
-    if (!phone || !email || !pendingPlan) {
+    if (!phone || !email) {
       showToast('Enter your phone number and email first.');
       return;
     }
@@ -628,9 +644,9 @@ export default function App() {
           password: '',
           subscribed: false,
           plan: null,
-          pendingPlan: pendingPlan.planName,
-          pendingAmount: Number(pendingPlan.amount),
-          pendingDays: Number(pendingPlan.days || 1),
+          pendingPlan: planObj.planName,
+          pendingAmount: Number(planObj.amount),
+          pendingDays: Number(planObj.days || 1),
           paymentMethod: `Manual WhatsApp (${method})`,
           status: 'pending',
           expiry: 0,
@@ -647,9 +663,9 @@ export default function App() {
           phone,
           email,
           subscribed: stillActive,
-          pendingPlan: pendingPlan.planName,
-          pendingAmount: Number(pendingPlan.amount),
-          pendingDays: Number(pendingPlan.days || 1),
+          pendingPlan: planObj.planName,
+          pendingAmount: Number(planObj.amount),
+          pendingDays: Number(planObj.days || 1),
           paymentMethod: `Manual WhatsApp (${method})`,
           status: stillActive ? 'approved' : 'pending',
         };
@@ -660,8 +676,8 @@ export default function App() {
         name: name || undefined,
         phone,
         email,
-        plan: pendingPlan.planName,
-        amount: Number(pendingPlan.amount),
+        plan: planObj.planName,
+        amount: Number(planObj.amount),
         method: `Manual WhatsApp (${method})`,
         status: 'pending' as const,
         createdAt: now,
@@ -696,16 +712,49 @@ export default function App() {
       };
     });
 
-    showToast('Manual WhatsApp request submitted! Pending Admin approval.');
+    showToast('WhatsApp payment request submitted! Pending Admin approval.');
   };
 
-  const guardPlaybackAccess = (label: string, isVipPoster = false): boolean => {
+  const handleManualWhatsappPayment = (
+    phone: string,
+    email: string,
+    method: string,
+    name?: string
+  ) => {
+    if (!pendingPlan) return;
+    recordWhatsappOrder(pendingPlan, phone, email, method, name);
+  };
+
+  const buildDownloadFileName = (title: string, videoUrl: string): string => {
+    const base = (title || 'vj-emma-video').replace(/[^a-zA-Z0-9._-]/g, '_');
+    const cleanUrl = (videoUrl || '').split(/[?#]/)[0];
+    const extMatch = cleanUrl.match(/\.(mp4|mkv|avi|mov|webm|m4v|flv|wmv|3gp|ts|ogg|ogv|mpeg|mpg)$/i);
+    return extMatch ? `${base}.${extMatch[1].toLowerCase()}` : `${base}.mp4`;
+  };
+
+  const triggerDirectDownload = (videoUrl: string, fileName: string) => {
+    const a = document.createElement('a');
+    a.href = videoUrl;
+    a.download = fileName;
+    a.target = '_blank';
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    showToast('Starting download...');
+  };
+
+  const guardPlaybackAccess = (
+    label: string,
+    isVipPoster = false,
+    itemTitle?: string
+  ): boolean => {
     if (!state.currentUser) {
       setPendingPlansAfterAuth(true);
+      setPendingVipTitle(isVipPoster ? itemTitle || 'VIP Movie' : undefined);
       setAuthModalOpen(true);
       showToast(
         isVipPoster
-          ? 'VIP movie locked. Please sign in and pay to watch or download.'
+          ? 'VIP locked. Please sign in first, then pay to watch or download.'
           : `Please sign in first to choose a plan and watch ${label}.`
       );
       return false;
@@ -721,12 +770,14 @@ export default function App() {
       return false;
     }
     if (!isSubscribed) {
-      showToast(
-        isVipPoster
-          ? 'This VIP movie cannot be watched or downloaded until you pay.'
-          : `Please subscribe to watch & download ${label}.`
-      );
-      setPlansModalOpen(true);
+      if (isVipPoster) {
+        setVipPopupTitle(itemTitle);
+        setVipPopupOpen(true);
+        showToast('This is VIP Movie. You need to pay to Watch / Download.');
+      } else {
+        setPlansModalOpen(true);
+        showToast(`Please subscribe to watch & download ${label}.`);
+      }
       return false;
     }
     return true;
@@ -735,48 +786,81 @@ export default function App() {
   const handleRequestWatchMovie = async (movieId: string) => {
     const m = state.movies.find((x) => x.id === movieId);
     if (!m) return;
-    const isVipPoster = (m.label || '')
-      .split(',')
-      .map((t) => t.trim().toUpperCase())
-      .includes('VIP');
-    if (!guardPlaybackAccess('movies', isVipPoster)) return;
+    const isVipPoster = isVipLabel(m.label);
+    if (!guardPlaybackAccess('movies', isVipPoster, m.title)) return;
     const url = await resolveMediaUrl(m.video);
     if (!url) {
       showToast('No video source attached to this title.');
       return;
     }
+    setDetailsMovieId(null);
     setActivePlayerMedia({
       title: m.title,
       videoUrl: url,
       description: m.description || '',
-      fileName: `${(m.title || 'movie').replace(/[^a-zA-Z0-9._-]/g, '_')}.mp4`,
+      fileName: buildDownloadFileName(m.title, url),
     });
+  };
+
+  const handleRequestDownloadMovie = async (movieId: string) => {
+    const m = state.movies.find((x) => x.id === movieId);
+    if (!m) return;
+    const isVipPoster = isVipLabel(m.label);
+    if (!guardPlaybackAccess('movies', isVipPoster, m.title)) return;
+    const url = await resolveMediaUrl(m.video);
+    if (!url) {
+      showToast('No downloadable video source attached to this title.');
+      return;
+    }
+    triggerDirectDownload(url, buildDownloadFileName(m.title, url));
   };
 
   const handleRequestWatchEpisode = async (episodeId: string) => {
     const ep = state.episodes.find((x) => x.id === episodeId);
     if (!ep) return;
     const season = state.seasons.find((s) => s.id === ep.seasonId);
-    const isVipSeason = (season?.label || '')
-      .split(',')
-      .map((t) => t.trim().toUpperCase())
-      .includes('VIP');
-    if (!guardPlaybackAccess('episodes', isVipSeason)) return;
+    const isVipSeason = isVipLabel(season?.label);
+    const titleLabel = season ? `${season.seriesTitle} · Ep ${ep.episodeNumber}` : ep.title;
+    if (!guardPlaybackAccess('episodes', isVipSeason, titleLabel)) return;
     const url = await resolveMediaUrl(ep.video);
     if (!url) {
       showToast('No video source attached to this episode.');
       return;
     }
+    setDetailsSeasonId(null);
     setActivePlayerMedia({
       title: `Ep ${ep.episodeNumber}: ${ep.title}`,
       videoUrl: url,
-      description: '',
-      fileName: `${(ep.title || 'episode').replace(/[^a-zA-Z0-9._-]/g, '_')}.mp4`,
+      description: season?.description || '',
+      fileName: buildDownloadFileName(ep.title, url),
     });
   };
 
+  const handleRequestDownloadEpisode = async (episodeId: string) => {
+    const ep = state.episodes.find((x) => x.id === episodeId);
+    if (!ep) return;
+    const season = state.seasons.find((s) => s.id === ep.seasonId);
+    const isVipSeason = isVipLabel(season?.label);
+    const titleLabel = season ? `${season.seriesTitle} · Ep ${ep.episodeNumber}` : ep.title;
+    if (!guardPlaybackAccess('episodes', isVipSeason, titleLabel)) return;
+    const url = await resolveMediaUrl(ep.video);
+    if (!url) {
+      showToast('No downloadable video source attached to this episode.');
+      return;
+    }
+    triggerDirectDownload(url, buildDownloadFileName(ep.title, url));
+  };
+
+  const handleTapLockedVipSeason = (season: Season) => {
+    guardPlaybackAccess(
+      'episodes',
+      isVipLabel(season.label),
+      `${season.seriesTitle} · Season ${season.seasonNumber}`
+    );
+  };
+
   const handleRequestWatchLiveTv = (channel: LiveTvChannel) => {
-    if (!guardPlaybackAccess('Live TV')) return;
+    if (!guardPlaybackAccess('Live TV', false, channel.name)) return;
     if (!channel.streamUrl) {
       showToast('No Live TV stream link attached to this channel.');
       return;
@@ -785,7 +869,7 @@ export default function App() {
       title: `${channel.name} (LIVE TV)`,
       videoUrl: channel.streamUrl,
       description: channel.category ? `Live Broadcast · ${channel.category}` : 'Live Broadcast',
-      fileName: `${(channel.name || 'livetv').replace(/[^a-zA-Z0-9._-]/g, '_')}.mp4`,
+      fileName: buildDownloadFileName(channel.name, channel.streamUrl),
       isLive: true,
     });
   };
@@ -1010,6 +1094,10 @@ export default function App() {
                 state={state}
                 isSubscribed={isSubscribed}
                 onWatchMovie={handleRequestWatchMovie}
+                onOpenMovieDetails={(id) => {
+                  setDetailsSeasonId(null);
+                  setDetailsMovieId(id);
+                }}
                 onLikeMovie={handleToggleLike}
                 onShareMovie={handleShareMovie}
                 onOpenComments={(id) => setCommentsMovieId(id)}
@@ -1026,6 +1114,10 @@ export default function App() {
                 state={state}
                 isSubscribed={isSubscribed}
                 onWatchMovie={handleRequestWatchMovie}
+                onOpenMovieDetails={(id) => {
+                  setDetailsSeasonId(null);
+                  setDetailsMovieId(id);
+                }}
                 onLikeMovie={handleToggleLike}
                 onShareMovie={handleShareMovie}
                 onOpenComments={(id) => setCommentsMovieId(id)}
@@ -1042,7 +1134,14 @@ export default function App() {
                 seasons={state.seasons}
                 episodes={state.episodes}
                 socialLinksRaw={state.settings.socialLinks}
+                isSubscribed={isSubscribed}
                 onWatchEpisode={handleRequestWatchEpisode}
+                onDownloadEpisode={handleRequestDownloadEpisode}
+                onOpenSeasonDetails={(id) => {
+                  setDetailsMovieId(null);
+                  setDetailsSeasonId(id);
+                }}
+                onTapLockedVipSeason={handleTapLockedVipSeason}
                 onLike={handleToggleLike}
                 onShare={handleShareMovie}
                 onOpenComments={(id) => setCommentsMovieId(id)}
@@ -1070,6 +1169,10 @@ export default function App() {
                 state={state}
                 isSubscribed={isSubscribed}
                 onWatchMovie={handleRequestWatchMovie}
+                onOpenMovieDetails={(id) => {
+                  setDetailsSeasonId(null);
+                  setDetailsMovieId(id);
+                }}
                 onWatchEpisode={handleRequestWatchEpisode}
                 onLikeMovie={handleToggleLike}
                 onShareMovie={handleShareMovie}
@@ -1134,6 +1237,7 @@ export default function App() {
         open={authModalOpen}
         onClose={() => {
           setPendingPlansAfterAuth(false);
+          setPendingVipTitle(undefined);
           setAuthModalOpen(false);
         }}
         onSubmit={handleAuthSubmit}
@@ -1147,6 +1251,65 @@ export default function App() {
           setPlansModalOpen(false);
           setPendingPlan(plan);
         }}
+      />
+
+      <VipPaymentPopupModal
+        open={vipPopupOpen}
+        itemTitle={vipPopupTitle}
+        plans={paymentPlans}
+        currentUser={state.currentUser}
+        onClose={() => setVipPopupOpen(false)}
+        onPayWithPesapal={(plan) => {
+          setVipPopupOpen(false);
+          setPendingPlan(plan);
+        }}
+        onPayWithWhatsapp={(plan) => {
+          setVipPopupOpen(false);
+          if (state.currentUser?.phone && state.currentUser?.email) {
+            recordWhatsappOrder(
+              plan,
+              state.currentUser.phone,
+              state.currentUser.email,
+              'WhatsApp',
+              state.currentUser.name
+            );
+          } else {
+            setPendingPlan(plan);
+          }
+        }}
+      />
+
+      <MovieDetailsModal
+        movie={detailsMovieId ? state.movies.find((m) => m.id === detailsMovieId) || null : null}
+        season={detailsSeasonId ? state.seasons.find((s) => s.id === detailsSeasonId) || null : null}
+        episodes={state.episodes}
+        isSubscribed={isSubscribed}
+        isAdmin={state.isAdminLoggedIn}
+        likeCount={
+          (detailsMovieId && state.likes[detailsMovieId]?.count) ||
+          (detailsSeasonId && state.likes[detailsSeasonId]?.count) ||
+          0
+        }
+        isLiked={Boolean(
+          (detailsMovieId && state.likes[detailsMovieId]?.liked) ||
+            (detailsSeasonId && state.likes[detailsSeasonId]?.liked)
+        )}
+        commentsCount={
+          (detailsMovieId && (state.comments[detailsMovieId] || []).length) ||
+          (detailsSeasonId && (state.comments[detailsSeasonId] || []).length) ||
+          0
+        }
+        onClose={() => {
+          setDetailsMovieId(null);
+          setDetailsSeasonId(null);
+        }}
+        onWatchMovie={handleRequestWatchMovie}
+        onDownloadMovie={handleRequestDownloadMovie}
+        onWatchEpisode={handleRequestWatchEpisode}
+        onDownloadEpisode={handleRequestDownloadEpisode}
+        onLike={handleToggleLike}
+        onShare={handleShareMovie}
+        onOpenComments={(id) => setCommentsMovieId(id)}
       />
 
       <PesapalModal
@@ -1163,6 +1326,12 @@ export default function App() {
         canDownload={isSubscribed}
         onClose={() => setActivePlayerMedia(null)}
         onNotify={showToast}
+        onRequireVipPay={() => {
+          const title = activePlayerMedia?.title;
+          setActivePlayerMedia(null);
+          setVipPopupTitle(title);
+          setVipPopupOpen(true);
+        }}
       />
 
       <CommentsModal
