@@ -1,12 +1,12 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { Film } from 'lucide-react';
+import { uploadFileToR2 } from '../r2Upload';
 import {
   DEFAULT_GENRE_LINE,
   LOCKED_ADMIN_EMAIL,
   normalizeSocialUrl,
   parseGenreLine,
   resolveMediaUrl,
-  saveBlobToIDB,
   useResolvedMedia,
 } from '../storage';
 import type { AdminTab, AppState, UserAccount } from '../types';
@@ -22,8 +22,6 @@ interface AdminPanelProps {
   initialEditChannelId?: string | null;
   onClearInitialEditChannel?: () => void;
 }
-
-const waitMs = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 const AdminThumb: React.FC<{ srcRef?: string; className?: string }> = ({ srcRef, className = 'h-16 w-12' }) => {
   const src = useResolvedMedia(srcRef);
@@ -242,8 +240,15 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
 
   const startMovieUpload = async () => {
     if (uploadInProgress) return;
-    const pFile = selectedPosterFile || posterFileRef.current?.files?.[0];
-    const vFile = selectedVideoFile || videoFileRef.current?.files?.[0];
+    if (!state.isAdminLoggedIn) {
+      onNotify('Admin login required to upload media.');
+      return;
+    }
+
+    const pFile =
+      selectedPosterFile || posterFileRef.current?.files?.[0] || settingsPosterFileRef.current?.files?.[0];
+    const vFile =
+      selectedVideoFile || videoFileRef.current?.files?.[0] || settingsVideoFileRef.current?.files?.[0];
     const pLink = moviePosterLink.trim();
     const vLink = movieVideoLink.trim();
 
@@ -254,40 +259,61 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
 
     setUploadInProgress(true);
     setMovieUploadReady(false);
-    refreshUploadFileLabel();
+    refreshUploadFileLabel(pFile || null, vFile || null);
+    setUploadPct(2);
+    setUploadStatus('Connecting to Cloudflare R2...');
 
-    setUploadPct(0);
-    setUploadStatus('Starting upload...');
-    await waitMs(350);
+    let nextPosterUrl = uploadedPosterRef || pLink;
+    let nextVideoUrl = uploadedVideoRef || vLink;
 
-    setUploadPct(10);
-    setUploadStatus('Preparing media...');
-    if (pFile) {
-      const ref = await saveBlobToIDB(`poster_${Date.now()}_${pFile.name}`, pFile);
-      setUploadedPosterRef(ref);
-    } else if (pLink) {
-      setUploadedPosterRef(pLink);
+    try {
+      if (pFile) {
+        setUploadStatus(`Uploading Poster (${pFile.name}) to R2...`);
+        nextPosterUrl = await uploadFileToR2(pFile, 'posters', (pct) => {
+          const scaled = vFile ? Math.round(pct * 0.25) : pct;
+          setUploadPct(scaled);
+        });
+        setUploadedPosterRef(nextPosterUrl);
+        setMoviePosterLink(nextPosterUrl);
+        setMoviePosterPreview(nextPosterUrl);
+        setPosterRemoved(false);
+        setSelectedPosterFile(null);
+        if (posterFileRef.current) posterFileRef.current.value = '';
+        if (settingsPosterFileRef.current) settingsPosterFileRef.current.value = '';
+      }
+
+      if (vFile) {
+        setUploadStatus(`Uploading Movie (${vFile.name}) to R2 bucket...`);
+        const baseOffset = pFile ? 25 : 0;
+        const span = pFile ? 75 : 100;
+        nextVideoUrl = await uploadFileToR2(vFile, 'movies', (pct) => {
+          setUploadPct(Math.min(99, Math.round(baseOffset + (pct / 100) * span)));
+        });
+        setUploadedVideoRef(nextVideoUrl);
+        setMovieVideoLink(nextVideoUrl);
+        setSelectedVideoFile(null);
+        if (videoFileRef.current) videoFileRef.current.value = '';
+        if (settingsVideoFileRef.current) settingsVideoFileRef.current.value = '';
+      }
+
+      setUploadPct(100);
+      setMovieUploadReady(true);
+
+      if (movieTitle.trim()) {
+        setUploadStatus('R2 Upload Complete! Saving to Supabase...');
+        await commitMovieToStateAndSupabase(nextPosterUrl, nextVideoUrl);
+        onNotify('Uploaded to R2 & saved to Supabase automatically!');
+      } else {
+        setUploadStatus('R2 Upload Complete! Enter Title & tap SAVE MOVIE.');
+        onNotify('R2 Upload Complete! Public URL saved automatically — enter Title & click SAVE MOVIE.');
+      }
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : 'R2 upload failed.';
+      setUploadStatus(`Upload error: ${msg}`);
+      onNotify(`R2 Upload Error: ${msg}`);
+    } finally {
+      setUploadInProgress(false);
     }
-    await waitMs(550);
-
-    setUploadPct(50);
-    setUploadStatus('Uploading video data...');
-    if (vFile) {
-      const ref = await saveBlobToIDB(`video_${Date.now()}_${vFile.name}`, vFile);
-      setUploadedVideoRef(ref);
-    } else if (vLink) {
-      setUploadedVideoRef(vLink);
-    }
-    await waitMs(650);
-
-    setUploadPct(80);
-    setUploadStatus('Finalizing...');
-    await waitMs(400);
-
-    setUploadPct(100);
-    setUploadStatus('Upload Complete, Now Tap SAVE MOVIE');
-    setUploadInProgress(false);
-    setMovieUploadReady(true);
   };
 
   const resetMovieForm = () => {
@@ -317,30 +343,8 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
     if (settingsVideoFileRef.current) settingsVideoFileRef.current.value = '';
   };
 
-  const saveMovieRecord = async () => {
-    if (uploadInProgress) {
-      onNotify('Please wait for upload to complete.');
-      return;
-    }
+  const commitMovieToStateAndSupabase = async (posterUrl: string, videoUrl: string) => {
     const title = movieTitle.trim();
-    if (!title) {
-      onNotify('Please enter Movie / Poster Title.');
-      return;
-    }
-
-    const pFile = selectedPosterFile || posterFileRef.current?.files?.[0] || settingsPosterFileRef.current?.files?.[0];
-    const vFile = selectedVideoFile || videoFileRef.current?.files?.[0] || settingsVideoFileRef.current?.files?.[0];
-
-    let nextPosterRef = uploadedPosterRef || moviePosterLink.trim();
-    if (pFile && !uploadedPosterRef) {
-      nextPosterRef = await saveBlobToIDB(`poster_${Date.now()}_${pFile.name}`, pFile);
-    }
-
-    let nextVideoRef = uploadedVideoRef || movieVideoLink.trim();
-    if (vFile && !uploadedVideoRef) {
-      nextVideoRef = await saveBlobToIDB(`video_${Date.now()}_${vFile.name}`, vFile);
-    }
-
     const cleanGenre = movieGenre.trim();
     const cleanLabel = editMovieId ? movieLabel.trim() : '';
 
@@ -360,8 +364,8 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
                   actors: movieActors.trim(),
                   label: cleanLabel,
                   description: movieDescription.trim(),
-                  poster: posterRemoved ? '' : nextPosterRef || m.poster,
-                  video: nextVideoRef || m.video,
+                  poster: posterRemoved ? '' : posterUrl || m.poster,
+                  video: videoUrl || m.video,
                 }
               : m
           ),
@@ -381,8 +385,8 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
             actors: movieActors.trim(),
             label: '',
             description: movieDescription.trim(),
-            poster: posterRemoved ? '' : nextPosterRef,
-            video: nextVideoRef,
+            poster: posterRemoved ? '' : posterUrl,
+            video: videoUrl,
             createdAt: Date.now(),
           },
         ],
@@ -390,7 +394,66 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
     });
 
     resetMovieForm();
-    onNotify('Movie & poster saved live!');
+  };
+
+  const saveMovieRecord = async () => {
+    if (uploadInProgress) {
+      onNotify('Please wait for R2 upload to complete.');
+      return;
+    }
+    if (!state.isAdminLoggedIn) {
+      onNotify('Admin login required.');
+      return;
+    }
+    const title = movieTitle.trim();
+    if (!title) {
+      onNotify('Please enter Movie / Poster Title.');
+      return;
+    }
+
+    const pFile =
+      selectedPosterFile || posterFileRef.current?.files?.[0] || settingsPosterFileRef.current?.files?.[0];
+    const vFile =
+      selectedVideoFile || videoFileRef.current?.files?.[0] || settingsVideoFileRef.current?.files?.[0];
+
+    let nextPosterRef = uploadedPosterRef || moviePosterLink.trim();
+    let nextVideoRef = uploadedVideoRef || movieVideoLink.trim();
+
+    if (pFile || vFile) {
+      setUploadInProgress(true);
+      try {
+        if (pFile && !uploadedPosterRef) {
+          setUploadStatus(`Uploading Poster (${pFile.name}) to R2...`);
+          nextPosterRef = await uploadFileToR2(pFile, 'posters', (pct) => {
+            setUploadPct(vFile ? Math.round(pct * 0.25) : pct);
+          });
+          setUploadedPosterRef(nextPosterRef);
+          setMoviePosterLink(nextPosterRef);
+        }
+        if (vFile && !uploadedVideoRef) {
+          setUploadStatus(`Uploading Movie (${vFile.name}) to R2...`);
+          const baseOffset = pFile ? 25 : 0;
+          const span = pFile ? 75 : 100;
+          nextVideoRef = await uploadFileToR2(vFile, 'movies', (pct) => {
+            setUploadPct(Math.min(99, Math.round(baseOffset + (pct / 100) * span)));
+          });
+          setUploadedVideoRef(nextVideoRef);
+          setMovieVideoLink(nextVideoRef);
+        }
+        setUploadPct(100);
+        setUploadStatus('Uploaded to R2 & Saved to Supabase!');
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : 'R2 upload failed.';
+        setUploadStatus(`Upload error: ${msg}`);
+        onNotify(`R2 Upload Error: ${msg}`);
+        setUploadInProgress(false);
+        return;
+      }
+      setUploadInProgress(false);
+    }
+
+    await commitMovieToStateAndSupabase(nextPosterRef, nextVideoRef);
+    onNotify('Movie & poster saved to Supabase live!');
   };
 
   const startEditMovie = async (id: string, stayOnCurrentTab = false) => {
@@ -485,7 +548,13 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
     const file = bannerFileRef.current?.files?.[0];
     let imageRef = bannerLink.trim();
     if (file) {
-      imageRef = await saveBlobToIDB(`banner_${Date.now()}_${file.name}`, file);
+      try {
+        onNotify('Uploading banner image to Cloudflare R2...');
+        imageRef = await uploadFileToR2(file, 'banners');
+      } catch (err) {
+        onNotify(err instanceof Error ? err.message : 'Banner R2 upload failed.');
+        return;
+      }
     }
     if (!imageRef && !editBannerId) {
       onNotify('Upload a banner image or paste link.');
@@ -567,7 +636,13 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
     const file = seasonPosterFileRef.current?.files?.[0];
     let posterRef = seasonPosterLink.trim();
     if (file) {
-      posterRef = await saveBlobToIDB(`season_${Date.now()}_${file.name}`, file);
+      try {
+        onNotify('Uploading season poster to Cloudflare R2...');
+        posterRef = await uploadFileToR2(file, 'seasons');
+      } catch (err) {
+        onNotify(err instanceof Error ? err.message : 'Season poster R2 upload failed.');
+        return;
+      }
     }
 
     const cleanSeasonLabel = editSeasonId ? seasonLabel.trim() : '';
@@ -632,7 +707,13 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
     const file = episodeVideoFileRef.current?.files?.[0];
     let videoRef = episodeVideoLink.trim();
     if (file) {
-      videoRef = await saveBlobToIDB(`ep_${Date.now()}_${file.name}`, file);
+      try {
+        onNotify('Uploading episode video to Cloudflare R2...');
+        videoRef = await uploadFileToR2(file, 'episodes');
+      } catch (err) {
+        onNotify(err instanceof Error ? err.message : 'Episode R2 upload failed.');
+        return;
+      }
     }
 
     updateState((prev) => {
@@ -720,7 +801,13 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
     const file = tvPosterFileRef.current?.files?.[0];
     let posterRef = tvPosterLink.trim();
     if (file) {
-      posterRef = await saveBlobToIDB(`tv_${Date.now()}_${file.name}`, file);
+      try {
+        onNotify('Uploading channel poster to Cloudflare R2...');
+        posterRef = await uploadFileToR2(file, 'livetv');
+      } catch (err) {
+        onNotify(err instanceof Error ? err.message : 'Channel poster R2 upload failed.');
+        return;
+      }
     }
 
     updateState((prev) => {
@@ -2120,7 +2207,10 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
 
               {/* UPLOAD PROGRESS BAR */}
               <div className="rounded-xl border border-[#6a0dad]/45 bg-[#08070d] p-3">
-                <div className="text-xs text-[#b0aab8]">{uploadFileNameText}</div>
+                <div className="flex flex-wrap items-center justify-between gap-2 text-xs text-[#b0aab8]">
+                  <span>{uploadFileNameText}</span>
+                  <span className="font-semibold text-[#f0cf65]">R2 Bucket: vj-emma-movies</span>
+                </div>
                 <div className="my-2 h-3.5 w-full overflow-hidden rounded-lg border border-[#d4af37]/40 bg-[#1a1824]">
                   <div
                     className="h-full bg-gradient-to-r from-[#6a0dad] to-[#d4af37] transition-all duration-300"
@@ -2129,24 +2219,28 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
                 </div>
                 <div className="flex items-center justify-between text-xs">
                   <span className="font-extrabold text-[#d4af37] tabular-nums">{uploadPct}%</span>
-                  <span className="font-bold text-white">{uploadStatus}</span>
+                  <span className={`font-bold ${movieUploadReady ? 'text-emerald-400' : 'text-white'}`}>
+                    {uploadStatus}
+                  </span>
                 </div>
               </div>
 
               <div className="flex flex-wrap gap-2">
                 <button
                   type="button"
+                  disabled={uploadInProgress}
                   onClick={startMovieUpload}
-                  className="min-h-[44px] rounded-lg border border-[#d4af37] bg-gradient-to-br from-[#6a0dad] to-[#4b077e] px-4 py-2 text-xs font-bold text-white"
+                  className="min-h-[44px] rounded-lg border border-[#d4af37] bg-gradient-to-br from-[#6a0dad] to-[#4b077e] px-4 py-2 text-xs font-bold text-white disabled:opacity-60"
                 >
-                  1. START UPLOAD
+                  {uploadInProgress ? `Uploading ${uploadPct}%...` : '1. Upload Movie to R2'}
                 </button>
                 <button
                   type="button"
+                  disabled={uploadInProgress}
                   onClick={saveMovieRecord}
-                  className="min-h-[44px] rounded-lg bg-gradient-to-br from-[#d4af37] to-[#b58d1e] px-4 py-2 text-xs font-extrabold text-black"
+                  className="min-h-[44px] rounded-lg bg-gradient-to-br from-[#d4af37] to-[#b58d1e] px-4 py-2 text-xs font-extrabold text-black disabled:opacity-60"
                 >
-                  2. SAVE MOVIE
+                  2. Save Movie to Supabase
                 </button>
                 {editMovieId && (
                   <button
@@ -3151,8 +3245,9 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
               Admin Sign-In Security (Locked Email)
             </h3>
             <p className="mb-3 text-xs text-[#b0aab8]">
-              Admin access is locked to <span className="font-bold text-white">{LOCKED_ADMIN_EMAIL}</span> via{' '}
-              <span className="font-bold text-[#f0cf65]">/admin</span>. Only signed-in Admin can change the password at will.
+              Admin access on <span className="font-bold text-[#f0cf65]">/admin</span> supports{' '}
+              <span className="font-bold text-white">admin</span> or{' '}
+              <span className="font-bold text-white">{LOCKED_ADMIN_EMAIL}</span>. Only signed-in Admin can change the password at will.
             </p>
             <div className="space-y-3">
               <div>
@@ -3575,10 +3670,15 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
                 <div className="flex flex-wrap gap-2">
                   <button
                     type="button"
+                    disabled={uploadInProgress}
                     onClick={saveMovieRecord}
-                    className="min-h-[42px] rounded-lg bg-gradient-to-br from-[#d4af37] to-[#b58d1e] px-4 py-2 text-xs font-extrabold text-black"
+                    className="min-h-[42px] rounded-lg bg-gradient-to-br from-[#d4af37] to-[#b58d1e] px-4 py-2 text-xs font-extrabold text-black disabled:opacity-60"
                   >
-                    {editMovieId ? 'Save Poster Changes' : 'Save New Poster / Movie'}
+                    {uploadInProgress
+                      ? `Uploading to R2 (${uploadPct}%)...`
+                      : editMovieId
+                        ? 'Save Poster Changes'
+                        : 'Save New Poster / Movie'}
                   </button>
                   {editMovieId && (
                     <button

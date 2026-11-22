@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { Film, Home, Radio, Search, Tv, User } from 'lucide-react';
 import { AdminPanel } from './components/AdminPanel';
 import { HomeView, LiveTvView, MoviesView, ProfileView, SearchView, SeriesView } from './components/CustomerViews';
@@ -26,6 +26,11 @@ import {
   resolveMediaUrl,
   saveState,
 } from './storage';
+import {
+  fetchSupabasePublicState,
+  subscribeToSupabasePublicChanges,
+  syncStateChangesToSupabase,
+} from './supabaseClient';
 import type { AppState, AppView, InfoModalType, LiveTvChannel, PendingPlan, PlayerMedia } from './types';
 
 const PROCESSED_PESAPAL_ORDERS_KEY = 'vj_emma_processed_pesapal_orders';
@@ -50,10 +55,55 @@ export default function App() {
   const [infoModalType, setInfoModalType] = useState<InfoModalType | null>(null);
   const [adminEditMovieId, setAdminEditMovieId] = useState<string | null>(null);
   const [adminEditChannelId, setAdminEditChannelId] = useState<string | null>(null);
+  const latestStateRef = useRef<AppState>(state);
+  latestStateRef.current = state;
 
   useEffect(() => {
     openMediaDB();
   }, []);
+
+  const refreshFromSupabase = useCallback(async () => {
+    const patch = await fetchSupabasePublicState(latestStateRef.current);
+    if (!patch) return;
+    setState((prev) => {
+      const next: AppState = {
+        ...prev,
+        ...patch,
+        isAdminLoggedIn: prev.isAdminLoggedIn,
+        currentUser: prev.currentUser,
+        users: prev.users,
+        wallet: prev.wallet,
+        walletTransactions: prev.walletTransactions,
+        adminEmail: prev.adminEmail,
+        adminPassword: prev.adminPassword,
+      };
+      latestStateRef.current = next;
+      saveState(next);
+      return next;
+    });
+  }, []);
+
+  useEffect(() => {
+    refreshFromSupabase();
+    const unsubRealtime = subscribeToSupabasePublicChanges(() => {
+      refreshFromSupabase();
+    });
+    const onVisibility = () => {
+      if (document.visibilityState === 'visible') {
+        refreshFromSupabase();
+      }
+    };
+    document.addEventListener('visibilitychange', onVisibility);
+    const pollId = window.setInterval(() => {
+      refreshFromSupabase();
+    }, 20000);
+
+    return () => {
+      unsubRealtime();
+      document.removeEventListener('visibilitychange', onVisibility);
+      window.clearInterval(pollId);
+    };
+  }, [refreshFromSupabase]);
 
   useEffect(() => {
     const syncFromStorage = () => {
@@ -107,13 +157,21 @@ export default function App() {
     return () => window.clearTimeout(timer);
   }, [toastMessage]);
 
-  const updateState = useCallback((updater: (prev: AppState) => AppState) => {
-    setState((prev) => {
+  const updateState = useCallback(
+    (updater: (prev: AppState) => AppState) => {
+      const prev = latestStateRef.current;
       const next = updater(prev);
+      latestStateRef.current = next;
       saveState(next);
-      return next;
-    });
-  }, []);
+      setState(next);
+      syncStateChangesToSupabase(prev, next).then((res) => {
+        if (!res.ok && next.isAdminLoggedIn) {
+          showToast(`Supabase sync warning: ${res.error || 'Could not sync'}`);
+        }
+      });
+    },
+    [showToast]
+  );
 
   const switchView = useCallback(
     (viewName: AppView) => {
@@ -221,11 +279,13 @@ export default function App() {
   const handleAdminLoginSubmit = (email: string, password: string) => {
     const cleanEmail = email.trim().toLowerCase();
     if (!cleanEmail || !password) {
-      showToast('Enter Admin Email and Password.');
+      showToast('Enter Admin Username / Email and Password.');
       return;
     }
-    if (cleanEmail !== LOCKED_ADMIN_EMAIL.toLowerCase()) {
-      showToast('Access denied: Admin is locked to the authorized email only.');
+    const isAllowedAdminIdentifier =
+      cleanEmail === 'admin' || cleanEmail === LOCKED_ADMIN_EMAIL.toLowerCase();
+    if (!isAllowedAdminIdentifier) {
+      showToast('Access denied: Invalid Admin credentials.');
       return;
     }
     if (password !== state.adminPassword) {
@@ -239,7 +299,7 @@ export default function App() {
       isAdminLoggedIn: true,
       currentUser: {
         phone: 'Admin',
-        email: LOCKED_ADMIN_EMAIL,
+        email: cleanEmail === 'admin' ? LOCKED_ADMIN_EMAIL : cleanEmail,
         role: 'admin',
         subscribed: true,
         plan: 'Admin',

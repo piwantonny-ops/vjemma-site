@@ -189,7 +189,7 @@ export const AdminLoginPage: React.FC<AdminLoginPageProps> = ({ onSubmit, onRetu
               Admin Sign In
             </h1>
             <p className="text-xs text-white/70">
-              Restricted to authorized Admin email only.
+              Restricted to authorized Admin only.
             </p>
           </div>
         </div>
@@ -197,13 +197,14 @@ export const AdminLoginPage: React.FC<AdminLoginPageProps> = ({ onSubmit, onRetu
         <form onSubmit={handleSubmit} className="space-y-3.5">
           <div>
             <label className="mb-1.5 block text-xs font-bold text-[#f0cf65]">
-              Admin Email Address
+              Admin Username or Email
             </label>
             <input
-              type="email"
+              type="text"
+              autoComplete="username"
               value={email}
               onChange={(e) => setEmail(e.target.value)}
-              placeholder="Authorized admin email"
+              placeholder="admin or piwantonny@gmail.com"
               required
               className="w-full min-h-[44px] rounded-lg border border-[#6a0dad]/60 bg-[#08070c] px-3 py-2.5 text-sm text-white placeholder-white/40 focus:border-[#d4af37] focus:outline-none"
             />

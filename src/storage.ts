@@ -209,7 +209,7 @@ export function createDefaultState(): AppState {
     likes: {},
     comments: {},
     adminEmail: LOCKED_ADMIN_EMAIL,
-    adminPassword: 'vjemma123',
+    adminPassword: 'VJEMMA123',
     currentUser: null,
     isAdminLoggedIn: false,
     settings: {
@@ -299,7 +299,7 @@ export function loadState(): AppState {
           ];
 
     const migratedPassword =
-      !parsed.adminPassword || parsed.adminPassword === 'admin123'
+      !parsed.adminPassword || parsed.adminPassword === 'admin123' || parsed.adminPassword === 'vjemma123'
         ? defaults.adminPassword
         : parsed.adminPassword;
 
@@ -351,12 +351,29 @@ export function saveState(state: AppState): void {
   }
 }
 
+export function sanitizeAssetUrl(raw?: string): string {
+  const val = (raw || '').trim();
+  if (!val) return '';
+  if (/^(javascript|vbscript|data:text\/html):/i.test(val)) return '';
+  if (
+    val.startsWith('/') ||
+    val.startsWith('idb://') ||
+    val.startsWith('blob:') ||
+    val.startsWith('data:image/') ||
+    /^https?:\/\//i.test(val)
+  ) {
+    return val;
+  }
+  return '';
+}
+
 export function normalizeSocialUrl(
   raw?: string,
   platformOrWhatsApp?: boolean | 'whatsapp' | 'youtube' | 'facebook' | 'tiktok'
 ): string {
   const val = (raw || '').trim();
   if (!val) return '';
+  if (/^(javascript|vbscript|data):/i.test(val)) return '';
   const platform =
     platformOrWhatsApp === true
       ? 'whatsapp'
