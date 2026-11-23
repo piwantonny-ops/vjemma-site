@@ -64,6 +64,7 @@ export default function App() {
   const [infoModalType, setInfoModalType] = useState<InfoModalType | null>(null);
   const [adminEditMovieId, setAdminEditMovieId] = useState<string | null>(null);
   const [adminEditChannelId, setAdminEditChannelId] = useState<string | null>(null);
+  const [isCatalogLoading, setIsCatalogLoading] = useState(true);
   const latestStateRef = useRef<AppState>(state);
   latestStateRef.current = state;
 
@@ -95,7 +96,7 @@ export default function App() {
 
   useEffect(() => {
     clearOldCachesAndCheckUpdates().finally(() => {
-      refreshFromSupabase(true);
+      refreshFromSupabase(true).finally(() => setIsCatalogLoading(false));
     });
 
     const unsubRealtime = subscribeToSupabasePublicChanges(() => {
@@ -139,14 +140,20 @@ export default function App() {
     const syncFromStorage = () => {
       const fresh = loadState();
       setState((prev) => ({
-        ...fresh,
+        ...prev,
+        wallet: fresh.wallet,
+        walletTransactions: fresh.walletTransactions,
+        clients: fresh.clients,
+        users: fresh.users,
+        adminPassword: fresh.adminPassword,
         isAdminLoggedIn: prev.isAdminLoggedIn,
         currentUser: prev.isAdminLoggedIn ? prev.currentUser : fresh.currentUser,
       }));
+      refreshFromSupabase(false);
     };
 
     const onStorage = (e: StorageEvent) => {
-      if (!e.key || e.key === DB_KEY) {
+      if (!e.key || e.key === DB_KEY || e.key === 'vj_emma_session_v1') {
         syncFromStorage();
       }
     };
@@ -162,7 +169,7 @@ export default function App() {
       window.removeEventListener('storage', onStorage);
       bc?.close();
     };
-  }, []);
+  }, [refreshFromSupabase]);
 
   useEffect(() => {
     const onPopState = () => {
@@ -202,7 +209,7 @@ export default function App() {
       setState(next);
       syncStateChangesToSupabase(prev, next).then((res) => {
         if (!res.ok && next.isAdminLoggedIn) {
-          showToast(`Supabase sync warning: ${res.error || 'Could not sync'}`);
+          showToast(`Cloud Database sync warning: ${res.error || 'Could not sync'}`);
         }
       });
     },
@@ -1121,11 +1128,17 @@ export default function App() {
               <HomeView
                 state={state}
                 isSubscribed={isSubscribed}
+                isCatalogLoading={isCatalogLoading}
                 onWatchMovie={handleRequestWatchMovie}
                 onOpenMovieDetails={(id) => {
                   setDetailsSeasonId(null);
                   setDetailsMovieId(id);
                 }}
+                onOpenSeasonDetails={(id) => {
+                  setDetailsMovieId(null);
+                  setDetailsSeasonId(id);
+                }}
+                onTapLockedVipSeason={handleTapLockedVipSeason}
                 onLikeMovie={handleToggleLike}
                 onShareMovie={handleShareMovie}
                 onOpenComments={(id) => setCommentsMovieId(id)}

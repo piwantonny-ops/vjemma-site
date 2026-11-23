@@ -153,72 +153,16 @@ export function useResolvedMedia(ref?: string): string {
   return url;
 }
 
+const SESSION_KEY = 'vj_emma_session_v1';
+
 export function createDefaultState(): AppState {
-  const now = 1795302000000;
   const parsedGenres = parseGenreLine(DEFAULT_GENRE_LINE);
   return {
     wallet: 0,
     walletTransactions: [],
     clients: 0,
     users: [],
-    movies: [
-      {
-        id: 'mov_sample_1',
-        title: 'True Light Over Acholi',
-        year: '2026',
-        rating: '4.9',
-        category: 'Christian',
-        genre: 'Christian',
-        actors: 'Okello Moses, Akello Grace, Opiyo Daniel',
-        label: '',
-        description: 'An inspiring Luo-translated faith story of hope, courage, and forgiveness.',
-        poster: '/src/assets/images/poster_true_light_1795302097420.jpg',
-        video: '',
-        createdAt: now + 1,
-      },
-      {
-        id: 'mov_sample_2',
-        title: 'Night Strike Kampala',
-        year: '2026',
-        rating: '4.8',
-        category: 'Action',
-        genre: 'Action',
-        actors: 'Odongo Victor, Aber Faith, Kizza Samuel',
-        label: '',
-        description: 'High-stakes undercover action translated in Luo by VJ Emma.',
-        poster: '/src/assets/images/poster_night_strike_1795302098055.jpg',
-        video: '',
-        createdAt: now + 2,
-      },
-      {
-        id: 'mov_sample_3',
-        title: 'The Golden Throne',
-        year: '2026',
-        rating: '5.0',
-        category: 'Drama',
-        genre: 'Drama',
-        actors: 'Komakech Brian, Apiyo Esther, Oloya Peter',
-        label: '',
-        description: 'A royal saga of leadership, betrayal, and honour brought home in Luo.',
-        poster: '/src/assets/images/poster_golden_throne_1795302098341.jpg',
-        video: '',
-        createdAt: now + 3,
-      },
-      {
-        id: 'mov_sample_4',
-        title: 'Promise By The Nile',
-        year: '2026',
-        rating: '4.7',
-        category: 'Acholi Movies',
-        genre: 'Acholi Movies',
-        actors: 'Onyango Denis, Adoch Mercy, Latim Ronald',
-        label: '',
-        description: 'A heartfelt family journey along the banks of the Nile in Luo.',
-        poster: '/src/assets/images/poster_nile_promise_1795302098552.jpg',
-        video: '',
-        createdAt: now + 4,
-      },
-    ],
+    movies: [],
     banners: [],
     seasons: [],
     episodes: [],
@@ -265,108 +209,57 @@ export function createDefaultState(): AppState {
 }
 
 export function loadState(): AppState {
+  const defaults = createDefaultState();
   try {
-    const raw = localStorage.getItem(DB_KEY);
-    if (!raw) return createDefaultState();
+    // Clean up legacy full-catalog browser cache so stale local data never overrides Cloud DB
+    localStorage.removeItem(DB_KEY);
+    const raw = localStorage.getItem(SESSION_KEY);
+    if (!raw) return defaults;
     const parsed = JSON.parse(raw) as Partial<AppState>;
-    const defaults = createDefaultState();
-    const savedR2 = Array.isArray(parsed.settings?.r2Links) ? parsed.settings!.r2Links : [];
-    const normalizedR2 = [0, 1, 2, 3, 4].map(
-      (idx) => savedR2[idx] ?? (idx === 0 ? parsed.settings?.r2Endpoint || '' : '')
-    );
-
-    const genreLine =
-      typeof parsed.settings?.genreLine === 'string' && parsed.settings.genreLine.trim().length > 0
-        ? parsed.settings.genreLine
-        : DEFAULT_GENRE_LINE;
-    const parsedGenreNames = parseGenreLine(genreLine);
-    const syncedGenres = parsedGenreNames.map((name, idx) => ({ id: `gen_${idx}`, name }));
-    const syncedCategories = parsedGenreNames.map((name, idx) => ({ id: `cat_${idx}`, name }));
-
-    const rawPlans = Array.isArray(parsed.settings?.paymentPlans)
-      ? parsed.settings!.paymentPlans
-      : [];
-    const normalizedPlans =
-      rawPlans.length > 0
-        ? rawPlans
-            .map((p, idx) => ({
-              id: String(p.id || `plan_${idx}_${Date.now()}`),
-              name: String(p.name || 'Plan').trim(),
-              price: Math.max(0, Number(p.price) || 0),
-              days: Math.max(1, Number(p.days) || 1),
-            }))
-            .filter((p) => p.name)
-        : [
-            {
-              id: 'plan_weekly',
-              name: 'Weekly',
-              price: Number(parsed.settings?.priceWeekly || 5000),
-              days: 7,
-            },
-            {
-              id: 'plan_monthly',
-              name: 'Monthly',
-              price: Number(parsed.settings?.priceMonthly || 15000),
-              days: 30,
-            },
-            {
-              id: 'plan_vip',
-              name: 'VIP',
-              price: Number(parsed.settings?.priceVip || 30000),
-              days: 30,
-            },
-          ];
-
     const migratedPassword =
       !parsed.adminPassword || parsed.adminPassword === 'admin123' || parsed.adminPassword === 'vjemma123'
         ? defaults.adminPassword
         : parsed.adminPassword;
 
-    const legacyAutoLabels = new Set(['TRENDING', 'HOT', 'NEW RELEASE', 'TOP 10']);
-    const cleanedMovies = Array.isArray(parsed.movies)
-      ? parsed.movies.map((m) =>
-          m.id.startsWith('mov_sample_') && legacyAutoLabels.has((m.label || '').trim().toUpperCase())
-            ? { ...m, label: '' }
-            : m
-        )
-      : defaults.movies;
-
     return {
       ...defaults,
-      ...parsed,
-      movies: cleanedMovies,
-      categories: syncedCategories,
-      genres: syncedGenres,
-      adminEmail: LOCKED_ADMIN_EMAIL,
-      adminPassword: migratedPassword,
+      wallet: typeof parsed.wallet === 'number' ? parsed.wallet : defaults.wallet,
       walletTransactions: Array.isArray(parsed.walletTransactions)
         ? parsed.walletTransactions
         : defaults.walletTransactions,
-      liveTvChannels: Array.isArray(parsed.liveTvChannels) ? parsed.liveTvChannels : defaults.liveTvChannels,
-      settings: {
-        ...defaults.settings,
-        ...(parsed.settings || {}),
-        genreLine,
-        r2Links: normalizedR2,
-        movieTags: ['VIP'],
-        paymentPlans: normalizedPlans,
-      },
+      clients: typeof parsed.clients === 'number' ? parsed.clients : defaults.clients,
+      users: Array.isArray(parsed.users) ? parsed.users : defaults.users,
+      adminEmail: LOCKED_ADMIN_EMAIL,
+      adminPassword: migratedPassword,
+      currentUser: parsed.currentUser || null,
+      isAdminLoggedIn: Boolean(parsed.isAdminLoggedIn),
     };
   } catch {
-    return createDefaultState();
+    return defaults;
   }
 }
 
 export function saveState(state: AppState): void {
   try {
-    localStorage.setItem(DB_KEY, JSON.stringify(state));
+    // Only persist session / auth / wallet in browser; Movies, Series, Posters, Settings live in Cloud DB
+    const sessionPayload = {
+      wallet: state.wallet,
+      walletTransactions: state.walletTransactions,
+      clients: state.clients,
+      users: state.users,
+      adminEmail: LOCKED_ADMIN_EMAIL,
+      adminPassword: state.adminPassword,
+      currentUser: state.currentUser,
+      isAdminLoggedIn: state.isAdminLoggedIn,
+    };
+    localStorage.setItem(SESSION_KEY, JSON.stringify(sessionPayload));
     if (typeof window !== 'undefined' && 'BroadcastChannel' in window) {
       const ch = new BroadcastChannel(LIVE_SYNC_CHANNEL);
       ch.postMessage({ type: 'state-updated', at: Date.now() });
       ch.close();
     }
   } catch (err) {
-    console.warn('Storage save issue', err);
+    console.warn('Session storage save issue', err);
   }
 }
 
@@ -382,6 +275,9 @@ export function sanitizeAssetUrl(raw?: string): string {
     /^https?:\/\//i.test(val)
   ) {
     return val;
+  }
+  if (/^[a-z0-9.-]+\.[a-z]{2,}(\/|$)/i.test(val)) {
+    return `https://${val}`;
   }
   return '';
 }

@@ -636,8 +636,11 @@ const SiteFooter: React.FC<{
 interface HomeViewProps {
   state: AppState;
   isSubscribed?: boolean;
+  isCatalogLoading?: boolean;
   onWatchMovie: (id: string) => void;
   onOpenMovieDetails?: (id: string) => void;
+  onOpenSeasonDetails?: (id: string) => void;
+  onTapLockedVipSeason?: (season: Season) => void;
   onLikeMovie: (id: string) => void;
   onShareMovie: (id: string) => void;
   onOpenComments: (id: string) => void;
@@ -652,8 +655,11 @@ interface HomeViewProps {
 export const HomeView: React.FC<HomeViewProps> = ({
   state,
   isSubscribed = false,
+  isCatalogLoading = false,
   onWatchMovie,
   onOpenMovieDetails,
+  onOpenSeasonDetails,
+  onTapLockedVipSeason,
   onLikeMovie,
   onShareMovie,
   onOpenComments,
@@ -723,6 +729,7 @@ export const HomeView: React.FC<HomeViewProps> = ({
   };
 
   const trendingMovies = [...state.movies].reverse();
+  const homeSeasons = [...state.seasons].reverse();
   const christianMovies = state.movies
     .filter(
       (m) =>
@@ -732,6 +739,11 @@ export const HomeView: React.FC<HomeViewProps> = ({
         (m.genre || '').toLowerCase().includes('faith')
     )
     .reverse();
+
+  const showSocial = state.settings.showPosterSocialBar !== false;
+  const showYear = state.settings.showPosterYear !== false;
+  const showActors = state.settings.showPosterActors !== false;
+  const showDescription = state.settings.showPosterDescription !== false;
 
   return (
     <div
@@ -772,7 +784,11 @@ export const HomeView: React.FC<HomeViewProps> = ({
         </div>
         <MoviesGrid
           movies={trendingMovies}
-          emptyText="No movies available yet. Please check back soon."
+          emptyText={
+            isCatalogLoading
+              ? 'Loading movies & series from Cloud Database...'
+              : 'No movies available yet. Please check back soon.'
+          }
           state={state}
           isSubscribed={isSubscribed}
           onWatch={onWatchMovie}
@@ -784,6 +800,139 @@ export const HomeView: React.FC<HomeViewProps> = ({
           onAdminDelete={onAdminDeleteMovie}
         />
 
+        {homeSeasons.length > 0 && (
+          <>
+            <div className="mb-3 flex items-center justify-between border-b border-[#6a0dad]/50 pb-2">
+              <h2 className="font-display text-lg font-semibold tracking-tight text-white">
+                Series &amp; Seasons
+              </h2>
+            </div>
+            <div className="mb-7 grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-4">
+              {homeSeasons.map((s) => {
+                const seasonEpisodes = state.episodes.filter((ep) => ep.seasonId === s.id);
+                const likeInfo = state.likes[s.id] || { count: 0, liked: false };
+                const commentsCount = (state.comments[s.id] || []).length;
+                const isVipSeason = isVipLabel(s.label);
+                const isVipLocked = isVipSeason && !isSubscribed && !state.isAdminLoggedIn;
+                const seasonGenres = parseMovieGenres(s.genre);
+                const yearAndDuration = [showYear ? s.year : '', s.duration].filter(Boolean).join(' · ');
+
+                const handleOpenSeason = () => {
+                  if (isVipLocked && onTapLockedVipSeason) {
+                    onTapLockedVipSeason(s);
+                    return;
+                  }
+                  onOpenSeasonDetails?.(s.id);
+                };
+
+                return (
+                  <article
+                    key={`home-sea-${s.id}`}
+                    className="group flex flex-col overflow-hidden rounded-xl border border-[#6a0dad]/60 bg-[#110e1a] shadow-lg transition-colors hover:border-[#d4af37]"
+                  >
+                    <div className="relative aspect-[2/3] w-full overflow-hidden bg-[#181228]">
+                      <button
+                        type="button"
+                        onClick={handleOpenSeason}
+                        aria-label={`Open ${s.seriesTitle}`}
+                        className="block h-full w-full text-left"
+                      >
+                        <SeasonPoster posterRef={s.poster} title={s.seriesTitle} />
+                      </button>
+                      <div className="pointer-events-none absolute inset-x-0 top-0 h-16 bg-gradient-to-b from-black/80 to-transparent" />
+                      {(s.label || '').trim() && (
+                        <div className="pointer-events-none absolute left-2 top-2 flex max-w-[72%] flex-wrap gap-1">
+                          <span
+                            className={
+                              isVipSeason
+                                ? 'inline-flex items-center gap-0.5 rounded border border-[#f0cf65] bg-gradient-to-r from-[#d4af37] to-[#f0cf65] px-1.5 py-0.5 text-[9px] font-black uppercase tracking-wider text-black shadow'
+                                : 'rounded border border-[#d4af37] bg-[#6a0dad]/95 px-1.5 py-0.5 text-[9px] font-extrabold uppercase tracking-wider text-[#f0cf65] shadow'
+                            }
+                          >
+                            {isVipSeason && isVipLocked && <Lock className="h-2.5 w-2.5" />}
+                            <span>{(s.label || '').trim()}</span>
+                          </span>
+                        </div>
+                      )}
+                      {showSocial && (
+                        <PosterSocialBar
+                          itemId={s.id}
+                          title={`${s.seriesTitle} - Season ${s.seasonNumber}`}
+                          likeCount={likeInfo.count}
+                          isLiked={likeInfo.liked}
+                          commentsCount={commentsCount}
+                          onLike={onLikeMovie}
+                          onShare={onShareMovie}
+                          onOpenComments={onOpenComments}
+                        />
+                      )}
+                    </div>
+
+                    <div className="flex flex-1 flex-col gap-1.5 p-3">
+                      <button type="button" onClick={handleOpenSeason} className="text-left">
+                        <h3 className="font-display text-sm font-semibold leading-snug text-white line-clamp-2 hover:text-[#f0cf65] transition-colors">
+                          {s.seriesTitle}
+                        </h3>
+                      </button>
+
+                      <div className="text-[11px] font-medium text-[#f0cf65] tabular-nums">
+                        Season {s.seasonNumber} · {seasonEpisodes.length}{' '}
+                        {seasonEpisodes.length === 1 ? 'Ep' : 'Eps'}
+                        {yearAndDuration ? ` · ${yearAndDuration}` : ''}
+                      </div>
+
+                      {seasonGenres.length > 0 && (
+                        <div className="flex flex-wrap gap-1">
+                          {seasonGenres.map((g) => (
+                            <span
+                              key={g}
+                              className="rounded border border-[#6a0dad]/60 bg-[#1a112a] px-1.5 py-0.5 text-[10px] font-semibold text-[#e6dcf5]"
+                            >
+                              {g}
+                            </span>
+                          ))}
+                        </div>
+                      )}
+
+                      {showActors && s.actors && (
+                        <p className="text-[11px] font-normal text-[#e0d8ef] line-clamp-1">
+                          <span className="font-semibold text-white/90">Actors:</span> {s.actors}
+                        </p>
+                      )}
+
+                      {showDescription && s.description && (
+                        <p className="text-[11px] leading-snug text-[#b0aab8] line-clamp-2">
+                          {s.description}
+                        </p>
+                      )}
+
+                      <div className="mt-auto flex items-center gap-1.5 pt-1">
+                        <button
+                          type="button"
+                          onClick={handleOpenSeason}
+                          className="flex min-h-[42px] flex-1 items-center justify-center gap-1.5 rounded-lg bg-gradient-to-r from-[#d4af37] via-[#f0cf65] to-[#d4af37] px-2.5 py-2 text-xs font-bold tracking-normal text-black shadow transition-transform active:scale-[0.98]"
+                        >
+                          {isVipLocked ? (
+                            <>
+                              <Lock className="h-3.5 w-3.5 shrink-0" />
+                              <span className="truncate">VIP · Pay to Watch</span>
+                            </>
+                          ) : (
+                            <>
+                              <Play className="h-3.5 w-3.5 shrink-0 fill-current" />
+                              <span>Watch Series</span>
+                            </>
+                          )}
+                        </button>
+                      </div>
+                    </div>
+                  </article>
+                );
+              })}
+            </div>
+          </>
+        )}
+
         <div className="mb-3 flex items-center justify-between border-b border-[#6a0dad]/50 pb-2">
           <h2 className="font-display text-lg font-semibold tracking-tight text-white">
             Christian Movies
@@ -791,7 +940,11 @@ export const HomeView: React.FC<HomeViewProps> = ({
         </div>
         <MoviesGrid
           movies={christianMovies}
-          emptyText="No Christian movies available yet."
+          emptyText={
+            isCatalogLoading
+              ? 'Loading movies from Cloud Database...'
+              : 'No Christian movies available yet.'
+          }
           state={state}
           isSubscribed={isSubscribed}
           onWatch={onWatchMovie}

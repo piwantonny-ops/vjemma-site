@@ -428,10 +428,19 @@ async function startServer() {
           name: 'disable-hmr-ws-client',
           transform(code: string, id: string) {
             if (id.includes('vite/dist/client/client.mjs') || id.endsWith('/@vite/client')) {
-              return code.replace(
-                'transport.connect(createHMRHandler(handleMessage));',
-                '/* HMR WebSocket disabled in preview */'
-              );
+              return code
+                .replace(
+                  'transport.connect(createHMRHandler(handleMessage));',
+                  '/* HMR WebSocket disabled in preview */'
+                )
+                .replace(
+                  'else throw new SendBeforeConnectError("send was called before connect");',
+                  'else return;'
+                )
+                .replace(
+                  'else throw new SendBeforeConnectError("invoke was called before connect");',
+                  'else return;'
+                );
             }
           },
         },

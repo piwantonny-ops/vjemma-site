@@ -8,6 +8,7 @@ import {
   parseGenreLine,
   parseMovieGenres,
   resolveMediaUrl,
+  sanitizeAssetUrl,
   useResolvedMedia,
 } from '../storage';
 import type { AdminTab, AppState, UserAccount } from '../types';
@@ -162,6 +163,37 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
 
   const [cpNew, setCpNew] = useState('');
   const [cpConfirm, setCpConfirm] = useState('');
+
+  const lastSyncedSettingsJsonRef = useRef<string>('');
+  useEffect(() => {
+    const serialized = JSON.stringify(state.settings);
+    if (serialized === lastSyncedSettingsJsonRef.current) return;
+    lastSyncedSettingsJsonRef.current = serialized;
+    setSetAppName(state.settings.appName);
+    setSetGenreLine(
+      state.settings.genreLine !== undefined ? state.settings.genreLine : DEFAULT_GENRE_LINE
+    );
+    const arr = Array.isArray(state.settings.r2Links) ? state.settings.r2Links : [];
+    setSetR2Links([0, 1, 2, 3, 4].map((i) => arr[i] ?? (i === 0 ? state.settings.r2Endpoint || '' : '')));
+    setSetPesapalKey(state.settings.pesapalKey);
+    setSetPesapalSecret(state.settings.pesapalSecret || '');
+    setSetPesapalIpnUrl(state.settings.pesapalIpnUrl || '');
+    setSetWhatsappKey(state.settings.whatsappKey);
+    setSetSocialLinks(state.settings.socialLinks);
+    setSetWhatsappUrl(state.settings.whatsappUrl || '');
+    setSetYoutubeUrl(state.settings.youtubeUrl || '');
+    setSetFacebookUrl(state.settings.facebookUrl || '');
+    setSetTiktokUrl(state.settings.tiktokUrl || '');
+    setSetPriceWeekly(String(state.settings.priceWeekly || 5000));
+    setSetPriceMonthly(String(state.settings.priceMonthly || 15000));
+    setSetPriceVip(String(state.settings.priceVip || 30000));
+    setSetShowPosterLabel(state.settings.showPosterLabel !== false);
+    setSetShowPosterRating(state.settings.showPosterRating !== false);
+    setSetShowPosterSocialBar(state.settings.showPosterSocialBar !== false);
+    setSetShowPosterYear(state.settings.showPosterYear !== false);
+    setSetShowPosterActors(state.settings.showPosterActors !== false);
+    setSetShowPosterDescription(state.settings.showPosterDescription !== false);
+  }, [state.settings]);
 
   /* --- CLIENTS / USERS & WALLET STATE --- */
   const [clientFilter, setClientFilter] = useState<'all' | 'pending' | 'approved' | 'blocked'>('all');
@@ -321,9 +353,9 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
       setMovieUploadReady(true);
 
       if (movieTitle.trim()) {
-        setUploadStatus('R2 Upload Complete! Saving to Supabase...');
+        setUploadStatus('R2 Upload Complete! Saving to Cloud Database...');
         await commitMovieToStateAndSupabase(nextPosterUrl, nextVideoUrl);
-        onNotify('Uploaded to R2 & saved to Supabase automatically!');
+        onNotify('Uploaded to R2 & saved to Cloud Database automatically!');
       } else {
         setUploadStatus('R2 Upload Complete! Enter Title & tap SAVE MOVIE.');
         onNotify('R2 Upload Complete! Public URL saved automatically — enter Title & click SAVE MOVIE.');
@@ -369,6 +401,8 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
     const title = movieTitle.trim();
     const cleanGenre = parseMovieGenres(movieGenre).join(', ');
     const cleanLabel = movieLabel.trim();
+    const cleanPosterInput = sanitizeAssetUrl(posterUrl) || sanitizeAssetUrl(moviePosterLink.trim()) || uploadedPosterRef;
+    const cleanVideoInput = sanitizeAssetUrl(videoUrl) || sanitizeAssetUrl(movieVideoLink.trim()) || uploadedVideoRef;
 
     updateState((prev) => {
       if (editMovieId) {
@@ -387,8 +421,8 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
                   actors: movieActors.trim(),
                   label: cleanLabel,
                   description: movieDescription.trim(),
-                  poster: posterRemoved ? '' : posterUrl || m.poster || '',
-                  video: videoUrl || m.video || '',
+                  poster: posterRemoved ? '' : cleanPosterInput || m.poster || '',
+                  video: cleanVideoInput || m.video || '',
                 }
               : m
           ),
@@ -440,13 +474,26 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
     const vFile =
       selectedVideoFile || videoFileRef.current?.files?.[0] || settingsVideoFileRef.current?.files?.[0];
 
-    let nextPosterRef = uploadedPosterRef || moviePosterLink.trim();
-    let nextVideoRef = uploadedVideoRef || movieVideoLink.trim();
+    const existingMovie = editMovieId
+      ? state.movies.find((x) => x.id === editMovieId)
+      : undefined;
+
+    let nextPosterRef = posterRemoved
+      ? ''
+      : uploadedPosterRef ||
+        sanitizeAssetUrl(moviePosterLink.trim()) ||
+        existingMovie?.poster ||
+        '';
+    let nextVideoRef =
+      uploadedVideoRef ||
+      sanitizeAssetUrl(movieVideoLink.trim()) ||
+      existingMovie?.video ||
+      '';
 
     if (pFile || vFile) {
       setUploadInProgress(true);
       try {
-        if (pFile && !uploadedPosterRef) {
+        if (pFile) {
           setUploadStatus(`Uploading Poster (${pFile.name}) to R2...`);
           nextPosterRef = await uploadFileToR2(pFile, 'posters', (pct) => {
             setUploadPct(vFile ? Math.round(pct * 0.25) : pct);
@@ -454,7 +501,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
           setUploadedPosterRef(nextPosterRef);
           setMoviePosterLink(nextPosterRef);
         }
-        if (vFile && !uploadedVideoRef) {
+        if (vFile) {
           setUploadStatus(`Uploading Movie (${vFile.name}) to R2...`);
           const baseOffset = pFile ? 25 : 0;
           const span = pFile ? 75 : 100;
@@ -465,7 +512,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
           setMovieVideoLink(nextVideoRef);
         }
         setUploadPct(100);
-        setUploadStatus('Uploaded to R2 & Saved to Supabase!');
+        setUploadStatus('Uploaded to R2 & Saved to Cloud Database!');
       } catch (err) {
         const msg = err instanceof Error ? err.message : 'R2 upload failed.';
         setUploadStatus(`Upload error: ${msg}`);
@@ -477,7 +524,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
     }
 
     await commitMovieToStateAndSupabase(nextPosterRef, nextVideoRef);
-    onNotify('Movie & poster saved to Supabase live!');
+    onNotify('Movie & poster saved to Cloud Database live!');
   };
 
   const startEditMovie = async (id: string, stayOnCurrentTab = false) => {
@@ -663,7 +710,10 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
     }
 
     const file = seasonPosterFileRef.current?.files?.[0];
-    let posterRef = seasonPosterLink.trim();
+    const existingSeason = editSeasonId ? state.seasons.find((s) => s.id === editSeasonId) : undefined;
+    let posterRef = seasonPosterRemoved
+      ? ''
+      : sanitizeAssetUrl(seasonPosterLink.trim()) || existingSeason?.poster || '';
     if (file) {
       try {
         onNotify('Uploading season poster to Cloudflare R2...');
@@ -691,7 +741,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
                   duration: seasonDuration.trim(),
                   actors: seasonActors.trim(),
                   description: seasonDescription.trim(),
-                  poster: seasonPosterRemoved ? '' : posterRef || s.poster,
+                  poster: seasonPosterRemoved ? '' : posterRef || s.poster || '',
                 }
               : s
           ),
@@ -836,7 +886,12 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
     }
 
     const file = tvPosterFileRef.current?.files?.[0];
-    let posterRef = tvPosterLink.trim();
+    const existingTv = editTvId
+      ? (state.liveTvChannels || []).find((x) => x.id === editTvId)
+      : undefined;
+    let posterRef = tvPosterRemoved
+      ? ''
+      : sanitizeAssetUrl(tvPosterLink.trim()) || existingTv?.poster || '';
     if (file) {
       try {
         onNotify('Uploading channel poster to Cloudflare R2...');
@@ -2307,7 +2362,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
                   onClick={saveMovieRecord}
                   className="min-h-[44px] rounded-lg bg-gradient-to-br from-[#d4af37] to-[#b58d1e] px-4 py-2 text-xs font-extrabold text-black disabled:opacity-60"
                 >
-                  2. Save Movie to Supabase
+                  2. Save Movie to Cloud
                 </button>
                 {editMovieId && (
                   <button
