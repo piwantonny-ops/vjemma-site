@@ -172,6 +172,36 @@ async function startServer() {
   app.set('trust proxy', 1);
   app.use(express.json({ limit: '4mb' }));
 
+  const ALLOWED_ORIGINS = new Set([
+    'https://vjemma.site',
+    'https://www.vjemma.site',
+  ]);
+
+  app.use('/api', (req: Request, res: Response, next) => {
+    const reqOrigin = String(req.headers.origin || '').trim();
+    const allowOrigin =
+      ALLOWED_ORIGINS.has(reqOrigin) ||
+      reqOrigin.endsWith('.vjemma.site') ||
+      reqOrigin.endsWith('.run.app') ||
+      reqOrigin.startsWith('http://localhost:') ||
+      reqOrigin.startsWith('http://127.0.0.1:')
+        ? reqOrigin
+        : 'https://vjemma.site';
+
+    res.setHeader('Access-Control-Allow-Origin', allowOrigin);
+    res.setHeader('Vary', 'Origin');
+    res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, PATCH, DELETE, OPTIONS');
+    res.setHeader(
+      'Access-Control-Allow-Headers',
+      'Content-Type, Authorization, apikey, Prefer, X-Client-Info'
+    );
+    if (req.method === 'OPTIONS') {
+      res.status(204).end();
+      return;
+    }
+    next();
+  });
+
   // Health check
   app.get('/api/health', (_req: Request, res: Response) => {
     const { key, secret } = getPesapalCredentials();

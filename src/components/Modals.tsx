@@ -339,7 +339,12 @@ interface PesapalModalProps {
   onClose: () => void;
   plan: PendingPlan | null;
   currentUser: SessionUser | null;
-  onManualWhatsappPayment: (phone: string, email: string, method: string, name?: string) => void;
+  onManualWhatsappPayment: (
+    phone: string,
+    email: string,
+    method: string,
+    name?: string
+  ) => Promise<{ ok: boolean; error?: string }>;
   onNotify: (msg: string) => void;
 }
 
@@ -356,6 +361,7 @@ export const PesapalModal: React.FC<PesapalModalProps> = ({
   const [email, setEmail] = useState('');
   const [method, setMethod] = useState('MTN Mobile Money');
   const [manualSubmitted, setManualSubmitted] = useState(false);
+  const [manualSubmitting, setManualSubmitting] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
 
@@ -365,6 +371,7 @@ export const PesapalModal: React.FC<PesapalModalProps> = ({
       setPhone(currentUser?.phone || '');
       setEmail(currentUser?.email || '');
       setManualSubmitted(false);
+      setManualSubmitting(false);
       setIsSubmitting(false);
       setErrorMsg(null);
     }
@@ -424,75 +431,78 @@ export const PesapalModal: React.FC<PesapalModalProps> = ({
       let returnedOrderId = '';
       let workerDiagnostic = '';
 
+      // 1. Try same-origin LIVE Pesapal v3 proxy (/api/pesapal/pay) first (avoids external Worker CORS issues)
       try {
-        const workerRes = await fetch(PESAPAL_WORKER_URL, {
+        const apiRes = await fetch('/api/pesapal/pay', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(requestPayload),
         });
-        const workerRaw = await workerRes.text();
-        let workerData: Record<string, unknown> = {};
-        try {
-          workerData = JSON.parse(workerRaw) as Record<string, unknown>;
-        } catch {
-          workerData = {};
-        }
-
-        const candidateUrl =
-          (typeof workerData.redirect_url === 'string' && workerData.redirect_url) ||
-          (typeof workerData.redirectUrl === 'string' && workerData.redirectUrl) ||
-          (typeof workerData.url === 'string' && workerData.url) ||
-          '';
-
-        if (workerRes.ok && candidateUrl) {
-          redirectUrl = candidateUrl;
-          returnedOrderId = String(
-            workerData.orderId || workerData.order_tracking_id || workerData.orderTrackingId || ''
-          );
-        } else if (
-          typeof workerData.error === 'string' &&
-          workerData.error.trim()
-        ) {
-          workerDiagnostic = workerData.error.trim();
-        } else if (
-          typeof workerData.message === 'string' &&
-          workerData.message.trim()
-        ) {
-          workerDiagnostic = workerData.message.trim();
-        } else if (workerRaw.includes('Worker is Live')) {
-          workerDiagnostic =
-            'Pesapal Worker returned a placeholder response without LIVE Pesapal checkout or CORS headers.';
+        const apiType = apiRes.headers.get('content-type') || '';
+        if (apiType.includes('application/json')) {
+          const apiData = (await apiRes.json().catch(() => ({}))) as Record<string, unknown>;
+          const candidateApiUrl =
+            (typeof apiData.redirect_url === 'string' && apiData.redirect_url) ||
+            (typeof apiData.redirectUrl === 'string' && apiData.redirectUrl) ||
+            '';
+          if (apiRes.ok && candidateApiUrl) {
+            redirectUrl = candidateApiUrl;
+            returnedOrderId = String(
+              apiData.orderId || apiData.order_tracking_id || apiData.orderTrackingId || ''
+            );
+          } else if (typeof apiData.error === 'string' && apiData.error.trim()) {
+            workerDiagnostic = apiData.error.trim();
+          }
         }
       } catch {
-        workerDiagnostic = 'Pesapal Worker connection blocked (CORS or network error).';
+        // Backend proxy unavailable (e.g. static Cloudflare Pages deploy) — try Pesapal Worker below
       }
 
-      // Fallback to same-origin LIVE Pesapal v3 proxy (/api/pesapal/pay)
+      // 2. Fallback to Cloudflare Pesapal Worker when static hosted or backend returned no redirect URL
       if (!redirectUrl) {
         try {
-          const apiRes = await fetch('/api/pesapal/pay', {
+          const workerRes = await fetch(PESAPAL_WORKER_URL, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify(requestPayload),
           });
-          const apiType = apiRes.headers.get('content-type') || '';
-          if (apiType.includes('application/json')) {
-            const apiData = (await apiRes.json().catch(() => ({}))) as Record<string, unknown>;
-            const candidateApiUrl =
-              (typeof apiData.redirect_url === 'string' && apiData.redirect_url) ||
-              (typeof apiData.redirectUrl === 'string' && apiData.redirectUrl) ||
-              '';
-            if (apiRes.ok && candidateApiUrl) {
-              redirectUrl = candidateApiUrl;
-              returnedOrderId = String(
-                apiData.orderId || apiData.order_tracking_id || apiData.orderTrackingId || ''
-              );
-            } else if (typeof apiData.error === 'string' && apiData.error.trim()) {
-              workerDiagnostic = apiData.error.trim();
-            }
+          const workerRaw = await workerRes.text();
+          let workerData: Record<string, unknown> = {};
+          try {
+            workerData = JSON.parse(workerRaw) as Record<string, unknown>;
+          } catch {
+            workerData = {};
+          }
+
+          const candidateUrl =
+            (typeof workerData.redirect_url === 'string' && workerData.redirect_url) ||
+            (typeof workerData.redirectUrl === 'string' && workerData.redirectUrl) ||
+            (typeof workerData.url === 'string' && workerData.url) ||
+            '';
+
+          if (workerRes.ok && candidateUrl) {
+            redirectUrl = candidateUrl;
+            returnedOrderId = String(
+              workerData.orderId || workerData.order_tracking_id || workerData.orderTrackingId || ''
+            );
+          } else if (
+            typeof workerData.error === 'string' &&
+            workerData.error.trim()
+          ) {
+            workerDiagnostic = workerData.error.trim();
+          } else if (
+            typeof workerData.message === 'string' &&
+            workerData.message.trim()
+          ) {
+            workerDiagnostic = workerData.message.trim();
+          } else if (!workerDiagnostic && workerRaw.includes('Worker is Live')) {
+            workerDiagnostic =
+              'Pesapal Worker returned a placeholder response without LIVE Pesapal checkout or CORS headers.';
           }
         } catch {
-          // Ignore backend fallback unavailability on pure static hosting
+          if (!workerDiagnostic) {
+            workerDiagnostic = 'Pesapal Worker connection blocked (CORS or network error).';
+          }
         }
       }
 
@@ -526,13 +536,31 @@ export const PesapalModal: React.FC<PesapalModalProps> = ({
     }
   };
 
-  const handleManualSubmit = () => {
+  const handleManualSubmit = async () => {
     const cleanPhone = phone.trim();
     const cleanEmail = email.trim();
     const cleanName = name.trim();
-    onManualWhatsappPayment(cleanPhone, cleanEmail, method, cleanName);
-    if (cleanPhone && cleanEmail) {
-      setManualSubmitted(true);
+    if (!cleanPhone || !cleanEmail) {
+      const msg = 'Enter your phone number and email first.';
+      setErrorMsg(msg);
+      onNotify(msg);
+      return;
+    }
+
+    setManualSubmitting(true);
+    setErrorMsg(null);
+    setManualSubmitted(false);
+    try {
+      const res = await onManualWhatsappPayment(cleanPhone, cleanEmail, method, cleanName);
+      if (res.ok) {
+        setManualSubmitted(true);
+      } else {
+        setManualSubmitted(false);
+        const err = res.error || 'Could not submit payment request to Supabase.';
+        setErrorMsg(err);
+      }
+    } finally {
+      setManualSubmitting(false);
     }
   };
 
@@ -646,11 +674,21 @@ export const PesapalModal: React.FC<PesapalModalProps> = ({
         {!manualSubmitted ? (
           <button
             type="button"
+            disabled={manualSubmitting}
             onClick={handleManualSubmit}
-            className="mt-3 flex min-h-[44px] w-full items-center justify-center gap-2 rounded-lg border border-emerald-400/70 bg-emerald-700 px-4 py-2 text-xs font-extrabold text-white transition-transform active:scale-[0.98]"
+            className="mt-3 flex min-h-[44px] w-full items-center justify-center gap-2 rounded-lg border border-emerald-400/70 bg-emerald-700 px-4 py-2 text-xs font-extrabold text-white transition-transform active:scale-[0.98] disabled:opacity-65"
           >
-            <MessageCircle className="h-4 w-4" />
-            <span>Pay Manually with WhatsApp</span>
+            {manualSubmitting ? (
+              <>
+                <Loader2 className="h-4 w-4 animate-spin" />
+                <span>Saving request to Supabase...</span>
+              </>
+            ) : (
+              <>
+                <MessageCircle className="h-4 w-4" />
+                <span>Pay Manually with WhatsApp</span>
+              </>
+            )}
           </button>
         ) : (
           <div className="mt-3 space-y-2">
@@ -737,48 +775,48 @@ export const PaymentSuccessPage: React.FC<PaymentSuccessPageProps> = ({
       let diagnostic = '';
 
       try {
-        const workerRes = await fetch(
-          `${PESAPAL_WORKER_URL}?orderId=${encodeURIComponent(urlOrderId)}`,
+        const apiRes = await fetch(
+          `/api/pesapal/status?orderId=${encodeURIComponent(urlOrderId)}`,
           { cache: 'no-store' }
         );
-        const workerText = await workerRes.text();
-        let parsed: WorkerStatusResponse = {};
-        try {
-          parsed = JSON.parse(workerText) as WorkerStatusResponse;
-        } catch {
-          parsed = {};
-        }
-        const statusCandidate = String(
-          parsed.status || parsed.payment_status_description || parsed.payment_status || ''
-        ).trim();
-        if (workerRes.ok && statusCandidate) {
-          data = parsed;
-          resolved = true;
-        } else if (parsed.error || parsed.message) {
-          diagnostic = parsed.error || parsed.message || '';
+        const apiType = apiRes.headers.get('content-type') || '';
+        if (apiType.includes('application/json')) {
+          const parsed = (await apiRes.json().catch(() => ({}))) as WorkerStatusResponse;
+          if (apiRes.ok) {
+            data = parsed;
+            resolved = true;
+          } else if (parsed.error || parsed.message) {
+            diagnostic = parsed.error || parsed.message || '';
+          }
         }
       } catch {
-        // Fallback to backend route below
+        // Ignore backend unavailability on pure static hosting
       }
 
       if (!resolved) {
         try {
-          const apiRes = await fetch(
-            `/api/pesapal/status?orderId=${encodeURIComponent(urlOrderId)}`,
+          const workerRes = await fetch(
+            `${PESAPAL_WORKER_URL}?orderId=${encodeURIComponent(urlOrderId)}`,
             { cache: 'no-store' }
           );
-          const apiType = apiRes.headers.get('content-type') || '';
-          if (apiType.includes('application/json')) {
-            const parsed = (await apiRes.json().catch(() => ({}))) as WorkerStatusResponse;
-            if (apiRes.ok) {
-              data = parsed;
-              resolved = true;
-            } else if (parsed.error || parsed.message) {
-              diagnostic = parsed.error || parsed.message || '';
-            }
+          const workerText = await workerRes.text();
+          let parsed: WorkerStatusResponse = {};
+          try {
+            parsed = JSON.parse(workerText) as WorkerStatusResponse;
+          } catch {
+            parsed = {};
+          }
+          const statusCandidate = String(
+            parsed.status || parsed.payment_status_description || parsed.payment_status || ''
+          ).trim();
+          if (workerRes.ok && statusCandidate) {
+            data = parsed;
+            resolved = true;
+          } else if (parsed.error || parsed.message) {
+            diagnostic = parsed.error || parsed.message || '';
           }
         } catch {
-          // Ignore backend unavailability
+          // Worker unavailable or blocked by CORS
         }
       }
 
@@ -1125,8 +1163,8 @@ export const MovieDetailsModal: React.FC<MovieDetailsModalProps> = ({
     ? movie.title
     : `${season!.seriesTitle} — Season ${season!.seasonNumber}`;
   const genres = movie
-    ? parseMovieGenres(movie.genre, movie.category)
-    : parseMovieGenres(season?.genre);
+    ? parseMovieGenres(movie.genres, movie.genre, movie.categories, movie.category)
+    : parseMovieGenres(season?.genres, season?.genre, season?.categories, season?.category);
   const year = movie ? movie.year : season?.year;
   const duration = movie ? movie.duration : season?.duration;
   const actors = movie ? movie.actors : season?.actors;

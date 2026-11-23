@@ -5,12 +5,60 @@ export const BRAND_LOGO_URL = '/assets/aistudio/logo_c90328c3.jpg';
 export const WHATSAPP_DISPLAY_PHONE = '0776043203';
 export const WHATSAPP_ADMIN_PHONE = '256776043203';
 export const LOCKED_ADMIN_EMAIL = 'piwantonny@gmail.com';
-export const DEFAULT_GENRE_LINE =
-  'Indian, Asian, Christian, Comedy, Action, Drama, Love, Family, Thriller, Horror, Documentary, Kids, VIP Movies, Lango Movies, Acholi Movies, Alur Movies';
+export const DEFAULT_GENRES_LIST = [
+  'Action',
+  'Adventure',
+  'Animation',
+  'Comedy',
+  'Crime',
+  'Documentary',
+  'Drama',
+  'Family',
+  'Fantasy',
+  'History',
+  'Horror',
+  'Kids',
+  'Musical',
+  'Mystery',
+  'Romance',
+  'Sci-Fi',
+  'Sport',
+  'Thriller',
+  'War',
+  'Western',
+  'Nollywood',
+  'Bollywood',
+  'Hollywood',
+  'Ugandan Movies',
+  'VJ Translated',
+  'Korean Drama',
+  'Chinese Drama',
+  'Turkish Series',
+  'Indian Series',
+  'Anime',
+] as const;
+
+export const DEFAULT_CATEGORIES_LIST = [
+  'New Releases',
+  'Trending Now',
+  'Top Rated',
+  'Most Watched',
+  'VJ Emma Exclusive',
+  'Action Movies',
+  'Comedy Movies',
+  'Horror Movies',
+  'Series & Seasons',
+  'Live TV',
+  'Coming Soon',
+  'VIP Only',
+] as const;
+
+export const DEFAULT_GENRE_LINE = DEFAULT_GENRES_LIST.join(', ');
+export const DEFAULT_CATEGORY_LINE = DEFAULT_CATEGORIES_LIST.join(', ');
 export const LIVE_SYNC_CHANNEL = 'vj_emma_live_sync';
 
-export function parseGenreLine(line?: string): string[] {
-  const source = line !== undefined ? line : DEFAULT_GENRE_LINE;
+export function parseGenreLine(line?: string, fallbackLine: string = DEFAULT_GENRE_LINE): string[] {
+  const source = line !== undefined ? line : fallbackLine;
   const result: string[] = [];
   const seen = new Set<string>();
   for (const part of source.split(',')) {
@@ -24,11 +72,40 @@ export function parseGenreLine(line?: string): string[] {
   return result;
 }
 
-export function parseMovieGenres(genre?: string, category?: string): string[] {
-  const combined = [genre || '', category || ''].filter(Boolean).join(',');
+export function parseCategoryLine(line?: string): string[] {
+  return parseGenreLine(line, DEFAULT_CATEGORY_LINE);
+}
+
+export function mergeTagLines(savedLine: string | undefined, defaultsList: readonly string[]): string {
+  const existing = savedLine ? parseGenreLine(savedLine, '') : [];
   const result: string[] = [];
   const seen = new Set<string>();
-  for (const part of combined.split(',')) {
+  for (const item of [...defaultsList, ...existing]) {
+    const clean = item.trim();
+    if (!clean) continue;
+    const key = clean.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    result.push(clean);
+  }
+  return result.join(', ');
+}
+
+export function parseMovieGenres(...sources: (string | string[] | undefined)[]): string[] {
+  const tokens: string[] = [];
+  for (const src of sources) {
+    if (!src) continue;
+    if (Array.isArray(src)) {
+      for (const item of src) {
+        if (typeof item === 'string') tokens.push(item);
+      }
+    } else if (typeof src === 'string') {
+      tokens.push(...src.split(','));
+    }
+  }
+  const result: string[] = [];
+  const seen = new Set<string>();
+  for (const part of tokens) {
     const clean = part.trim();
     if (!clean) continue;
     const key = clean.toLowerCase();
@@ -157,6 +234,7 @@ const SESSION_KEY = 'vj_emma_session_v1';
 
 export function createDefaultState(): AppState {
   const parsedGenres = parseGenreLine(DEFAULT_GENRE_LINE);
+  const parsedCategories = parseCategoryLine(DEFAULT_CATEGORY_LINE);
   return {
     wallet: 0,
     walletTransactions: [],
@@ -167,7 +245,7 @@ export function createDefaultState(): AppState {
     seasons: [],
     episodes: [],
     liveTvChannels: [],
-    categories: parsedGenres.map((name, idx) => ({ id: `cat_${idx}`, name })),
+    categories: parsedCategories.map((name, idx) => ({ id: `cat_${idx}`, name })),
     genres: parsedGenres.map((name, idx) => ({ id: `gen_${idx}`, name })),
     likes: {},
     comments: {},
@@ -189,6 +267,7 @@ export function createDefaultState(): AppState {
       facebookUrl: '',
       tiktokUrl: '',
       genreLine: DEFAULT_GENRE_LINE,
+      categoryLine: DEFAULT_CATEGORY_LINE,
       movieTags: ['VIP'],
       paymentPlans: [
         { id: 'plan_weekly', name: 'Weekly', price: 5000, days: 7 },
@@ -211,7 +290,7 @@ export function createDefaultState(): AppState {
 export function loadState(): AppState {
   const defaults = createDefaultState();
   try {
-    // Clean up legacy full-catalog browser cache so stale local data never overrides Cloud DB
+    // Clean up legacy localStorage cache so Clients/Payments/Catalog NEVER read stale browser cache
     localStorage.removeItem(DB_KEY);
     const raw = localStorage.getItem(SESSION_KEY);
     if (!raw) return defaults;
@@ -223,12 +302,6 @@ export function loadState(): AppState {
 
     return {
       ...defaults,
-      wallet: typeof parsed.wallet === 'number' ? parsed.wallet : defaults.wallet,
-      walletTransactions: Array.isArray(parsed.walletTransactions)
-        ? parsed.walletTransactions
-        : defaults.walletTransactions,
-      clients: typeof parsed.clients === 'number' ? parsed.clients : defaults.clients,
-      users: Array.isArray(parsed.users) ? parsed.users : defaults.users,
       adminEmail: LOCKED_ADMIN_EMAIL,
       adminPassword: migratedPassword,
       currentUser: parsed.currentUser || null,
@@ -241,12 +314,8 @@ export function loadState(): AppState {
 
 export function saveState(state: AppState): void {
   try {
-    // Only persist session / auth / wallet in browser; Movies, Series, Posters, Settings live in Cloud DB
+    // Only persist auth session in browser; Clients, Payment Requests, Movies, Series, Settings live in Cloud DB / Supabase
     const sessionPayload = {
-      wallet: state.wallet,
-      walletTransactions: state.walletTransactions,
-      clients: state.clients,
-      users: state.users,
       adminEmail: LOCKED_ADMIN_EMAIL,
       adminPassword: state.adminPassword,
       currentUser: state.currentUser,

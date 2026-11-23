@@ -1,12 +1,19 @@
 import { createClient } from '@supabase/supabase-js';
 import { R2_BUCKET_NAME, R2_UPLOAD_WORKER_URL } from './r2Upload';
 import {
+  DEFAULT_CATEGORIES_LIST,
+  DEFAULT_CATEGORY_LINE,
+  DEFAULT_GENRES_LIST,
   DEFAULT_GENRE_LINE,
+  mergeTagLines,
   normalizeSocialUrl,
+  parseCategoryLine,
   parseGenreLine,
+  parseMovieGenres,
   sanitizeAssetUrl,
 } from './storage';
 import type {
+  AccountStatus,
   AppSettings,
   AppState,
   Banner,
@@ -15,8 +22,10 @@ import type {
   LikeRecord,
   LiveTvChannel,
   Movie,
-  PaymentPlan,
+  PaymentRequestRecord,
   Season,
+  UserAccount,
+  WalletTransaction,
 } from './types';
 
 export const SUPABASE_URL = (
@@ -167,28 +176,11 @@ async function writeR2JsonDoc<T>(key: string, doc: T): Promise<boolean> {
   }
 }
 
-function normalizeGenresString(d: Record<string, unknown>): string {
-  const fromArray = Array.isArray(d.genres)
-    ? d.genres.map((x) => String(x || '').trim()).filter(Boolean)
-    : [];
-  const rawGenre = typeof d.genre === 'string' ? d.genre.trim() : '';
-  const rawCategory = typeof d.category === 'string' ? d.category.trim() : '';
-  const parts = [
-    ...fromArray,
-    ...(rawGenre ? rawGenre.split(',').map((s) => s.trim()) : []),
-    ...(rawCategory ? rawCategory.split(',').map((s) => s.trim()) : []),
-  ].filter(Boolean);
-
-  const unique: string[] = [];
-  const seen = new Set<string>();
-  for (const p of parts) {
-    const k = p.toLowerCase();
-    if (!seen.has(k)) {
-      seen.add(k);
-      unique.push(p);
-    }
-  }
-  return unique.join(', ');
+function extractTagsArray(rawArray: unknown, rawText: unknown): string[] {
+  return parseMovieGenres(
+    Array.isArray(rawArray) ? rawArray.map((x) => String(x || '')) : undefined,
+    typeof rawText === 'string' ? rawText : undefined
+  );
 }
 
 function extractSupabaseData(
@@ -216,7 +208,12 @@ function extractSupabaseData(
     const rawVideo = String(d.video || d.videoUrl || d.downloadUrl || '');
     const poster = sanitizeAssetUrl(rawPoster);
     const video = sanitizeAssetUrl(rawVideo);
-    const genreStr = normalizeGenresString(d);
+    const genresArr = extractTagsArray(d.genres, d.genre);
+    const categoriesArr = extractTagsArray(d.categories, d.category);
+    const effectiveGenres = genresArr.length > 0 ? genresArr : categoriesArr;
+    const effectiveCategories = categoriesArr.length > 0 ? categoriesArr : genresArr;
+    const genreStr = effectiveGenres.join(', ');
+    const categoryStr = effectiveCategories.join(', ');
     const label =
       typeof d.label === 'string' && d.label.trim()
         ? d.label.trim()
@@ -252,6 +249,9 @@ function extractSupabaseData(
             seasonNumber,
             label,
             genre: genreStr,
+            genres: effectiveGenres,
+            category: categoryStr,
+            categories: effectiveCategories,
             year,
             duration,
             actors,
@@ -279,6 +279,9 @@ function extractSupabaseData(
           seasonNumber: '1',
           label,
           genre: genreStr,
+          genres: effectiveGenres,
+          category: categoryStr,
+          categories: effectiveCategories,
           year,
           duration,
           actors,
@@ -304,8 +307,10 @@ function extractSupabaseData(
       year,
       duration,
       rating,
-      category: genreStr,
+      category: categoryStr,
+      categories: effectiveCategories,
       genre: genreStr,
+      genres: effectiveGenres,
       actors,
       label,
       description,
@@ -370,6 +375,9 @@ function extractSupabaseData(
     if (typeof vjSettings.genreLine === 'string' && vjSettings.genreLine.trim()) {
       settingsPatch.genreLine = vjSettings.genreLine;
     }
+    if (typeof vjSettings.categoryLine === 'string' && vjSettings.categoryLine.trim()) {
+      settingsPatch.categoryLine = vjSettings.categoryLine;
+    }
     if (Array.isArray(vjSettings.paymentPlans) && vjSettings.paymentPlans.length > 0) {
       settingsPatch.paymentPlans = vjSettings.paymentPlans;
     }
@@ -387,6 +395,7 @@ function sanitizePublicSettingsForCloud(settings: AppSettings): Partial<AppSetti
     tiktokUrl: settings.tiktokUrl,
     socialLinks: settings.socialLinks,
     genreLine: settings.genreLine ?? DEFAULT_GENRE_LINE,
+    categoryLine: settings.categoryLine ?? DEFAULT_CATEGORY_LINE,
     paymentPlans: settings.paymentPlans,
     priceWeekly: settings.priceWeekly,
     priceMonthly: settings.priceMonthly,
@@ -404,8 +413,14 @@ function sanitizePublicSettingsForCloud(settings: AppSettings): Partial<AppSetti
 }
 
 function sanitizeMovieForCloud(movie: Movie): Movie {
+  const genresArr = parseMovieGenres(movie.genres, movie.genre);
+  const categoriesArr = parseMovieGenres(movie.categories, movie.category);
   return {
     ...movie,
+    genres: genresArr,
+    genre: genresArr.join(', '),
+    categories: categoriesArr,
+    category: categoriesArr.join(', '),
     poster: movie.poster && !movie.poster.startsWith('idb://') ? sanitizeAssetUrl(movie.poster) : '',
     video: movie.video && !movie.video.startsWith('idb://') ? sanitizeAssetUrl(movie.video) : '',
   };
@@ -417,6 +432,8 @@ function mapMovieToSupabasePayload(movie: Movie): {
   updated_at: string;
 } {
   const clean = sanitizeMovieForCloud(movie);
+  const genresArr = parseMovieGenres(clean.genres, clean.genre);
+  const categoriesArr = parseMovieGenres(clean.categories, clean.category);
   return {
     id: clean.id,
     data: {
@@ -425,8 +442,10 @@ function mapMovieToSupabasePayload(movie: Movie): {
       year: clean.year || '',
       duration: clean.duration || '',
       rating: clean.rating || '',
-      category: clean.category || '',
-      genre: clean.genre || clean.category || '',
+      category: categoriesArr.join(', '),
+      categories: categoriesArr,
+      genre: genresArr.join(', '),
+      genres: genresArr,
       actors: clean.actors || '',
       label: clean.label || '',
       badge: clean.label || '',
@@ -446,11 +465,12 @@ function mapMovieToSupabasePayload(movie: Movie): {
   };
 }
 
-function buildCategoriesAndGenres(genreLine: string) {
-  const parsed = parseGenreLine(genreLine);
+function buildCategoriesAndGenres(genreLine: string, categoryLine?: string) {
+  const parsedGenres = parseGenreLine(genreLine);
+  const parsedCategories = parseCategoryLine(categoryLine);
   return {
-    categories: parsed.map((name, idx) => ({ id: `cat_${idx}`, name })),
-    genres: parsed.map((name, idx) => ({ id: `gen_${idx}`, name })),
+    categories: parsedCategories.map((name, idx) => ({ id: `cat_${idx}`, name })),
+    genres: parsedGenres.map((name, idx) => ({ id: `gen_${idx}`, name })),
   };
 }
 
@@ -593,15 +613,33 @@ export async function fetchSupabasePublicState(
           extractedSupa.settingsPatch.r2Endpoint ||
           '',
         r2Links: mergedR2,
-        genreLine:
-          typeof cloudSet.genreLine === 'string' && cloudSet.genreLine.trim()
+        genreLine: !cloudSet.categoryLine
+          ? mergeTagLines(cloudSet.genreLine, DEFAULT_GENRES_LIST)
+          : typeof cloudSet.genreLine === 'string' && cloudSet.genreLine.trim()
             ? cloudSet.genreLine
             : currentState.settings.genreLine || DEFAULT_GENRE_LINE,
+        categoryLine:
+          typeof cloudSet.categoryLine === 'string' && cloudSet.categoryLine.trim()
+            ? cloudSet.categoryLine
+            : currentState.settings.categoryLine || DEFAULT_CATEGORY_LINE,
         paymentPlans:
           Array.isArray(cloudSet.paymentPlans) && cloudSet.paymentPlans.length > 0
             ? cloudSet.paymentPlans
             : currentState.settings.paymentPlans,
       };
+      if (!cloudSet.categoryLine) {
+        bootstrapWrites.push(
+          writeR2JsonDoc<SettingsCloudDoc>(DB_SETTINGS_KEY, {
+            version: 1,
+            updatedAt: Date.now(),
+            settings: {
+              ...cloudSet,
+              genreLine: resolvedSettings.genreLine,
+              categoryLine: resolvedSettings.categoryLine,
+            },
+          })
+        );
+      }
     } else {
       const legSet = (legacySnapshot?.settings || {}) as Partial<AppSettings>;
       resolvedSettings = {
@@ -624,10 +662,16 @@ export async function fetchSupabasePublicState(
           extractedSupa.settingsPatch.tiktokUrl ||
           (typeof legSet.tiktokUrl === 'string' ? legSet.tiktokUrl : '') ||
           '',
-        genreLine:
+        genreLine: mergeTagLines(
           (typeof legSet.genreLine === 'string' && legSet.genreLine.trim()) ||
-          extractedSupa.settingsPatch.genreLine ||
-          DEFAULT_GENRE_LINE,
+            extractedSupa.settingsPatch.genreLine,
+          DEFAULT_GENRES_LIST
+        ),
+        categoryLine: mergeTagLines(
+          (typeof legSet.categoryLine === 'string' && legSet.categoryLine.trim()) ||
+            extractedSupa.settingsPatch.categoryLine,
+          DEFAULT_CATEGORIES_LIST
+        ),
         paymentPlans:
           Array.isArray(legSet.paymentPlans) && legSet.paymentPlans.length > 0
             ? legSet.paymentPlans
@@ -686,7 +730,8 @@ export async function fetchSupabasePublicState(
     }
 
     const { categories, genres } = buildCategoriesAndGenres(
-      resolvedSettings.genreLine || DEFAULT_GENRE_LINE
+      resolvedSettings.genreLine || DEFAULT_GENRE_LINE,
+      resolvedSettings.categoryLine || DEFAULT_CATEGORY_LINE
     );
 
     return {
@@ -903,6 +948,11 @@ export async function syncStateChangesToSupabase(
                 ? mergedSettings.genreLine
                 : next.settings.genreLine
             );
+            const parsedCategories = parseCategoryLine(
+              typeof mergedSettings.categoryLine === 'string'
+                ? mergedSettings.categoryLine
+                : next.settings.categoryLine
+            );
             const existingLegacy =
               cachedSiteSettingsBase.settings && typeof cachedSiteSettingsBase.settings === 'object'
                 ? (cachedSiteSettingsBase.settings as Record<string, unknown>)
@@ -913,7 +963,7 @@ export async function syncStateChangesToSupabase(
                 id: name.toLowerCase().replace(/[^a-z0-9]+/g, '-'),
                 name,
               })),
-              categories: parsedGenres.map((name) => ({
+              categories: parsedCategories.map((name) => ({
                 id: name.toLowerCase().replace(/[^a-z0-9]+/g, '-'),
                 name,
                 slug: name.toLowerCase().replace(/[^a-z0-9]+/g, '-'),
@@ -1038,11 +1088,215 @@ export async function syncStateChangesToSupabase(
   }
 }
 
+export function generateUuid(): string {
+  if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
+    return crypto.randomUUID();
+  }
+  return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, (c) => {
+    const r = Math.floor(Math.random() * 16);
+    const v = c === 'x' ? r : (r & 0x3) | 0x8;
+    return v.toString(16);
+  });
+}
+
+function formatSupabaseError(err: { code?: string; message?: string; details?: string } | null): string {
+  if (!err) return 'Unknown Supabase error.';
+  const code = err.code ? `[${err.code}] ` : '';
+  const msg = err.message || 'Supabase request failed';
+  const details = err.details ? ` (${err.details})` : '';
+  return `${code}${msg}${details}`;
+}
+
+function mapPaymentRequestRowToUser(row: PaymentRequestRecord): UserAccount {
+  const status: AccountStatus =
+    row.status === 'approved' || row.status === 'blocked' ? row.status : 'pending';
+  const createdMs = row.created_at ? Date.parse(row.created_at) : NaN;
+  const createdAt = Number.isFinite(createdMs) ? createdMs : Date.now();
+  const expiry = Number(row.expiry || 0);
+  const amount = Number(row.amount || 0);
+  const days = Math.max(1, Number(row.days || 1));
+
+  return {
+    id: String(row.id),
+    name: row.name ? String(row.name) : undefined,
+    phone: String(row.phone || '').trim(),
+    email: String(row.email || '').trim(),
+    password: '',
+    subscribed: status === 'approved',
+    plan: status === 'approved' ? String(row.plan || 'VIP') : null,
+    pendingPlan: status === 'pending' ? String(row.plan || 'Subscription') : null,
+    pendingAmount: amount,
+    pendingDays: days,
+    paymentMethod: String(row.payment_method || 'Manual WhatsApp'),
+    status,
+    expiry,
+    createdAt,
+  };
+}
+
+export async function fetchPaymentRequestsFromSupabase(): Promise<{
+  ok: boolean;
+  users: UserAccount[];
+  transactions: WalletTransaction[];
+  wallet: number;
+  error?: string;
+}> {
+  try {
+    const { data, error } = await supabase
+      .from('payment_requests')
+      .select('*')
+      .order('created_at', { ascending: false });
+
+    if (error) {
+      return {
+        ok: false,
+        users: [],
+        transactions: [],
+        wallet: 0,
+        error: formatSupabaseError(error),
+      };
+    }
+
+    const rows = Array.isArray(data) ? (data as PaymentRequestRecord[]) : [];
+    const users = rows.map(mapPaymentRequestRowToUser);
+    let wallet = 0;
+    const transactions: WalletTransaction[] = rows.map((row) => {
+      const amount = Number(row.amount || 0);
+      const createdMs = row.created_at ? Date.parse(row.created_at) : NaN;
+      const isApproved = row.status === 'approved';
+      if (isApproved && Number.isFinite(amount) && amount > 0) {
+        wallet += amount;
+      }
+      return {
+        id: `tx_${row.id}`,
+        name: row.name ? String(row.name) : undefined,
+        phone: String(row.phone || '').trim(),
+        email: String(row.email || '').trim(),
+        plan: String(row.plan || 'Subscription'),
+        amount,
+        method: String(row.payment_method || 'Manual WhatsApp'),
+        status: isApproved ? 'completed' : 'pending',
+        createdAt: Number.isFinite(createdMs) ? createdMs : Date.now(),
+      };
+    });
+
+    return { ok: true, users, transactions, wallet };
+  } catch (err) {
+    return {
+      ok: false,
+      users: [],
+      transactions: [],
+      wallet: 0,
+      error: err instanceof Error ? err.message : 'Failed to load payment_requests from Supabase.',
+    };
+  }
+}
+
+export async function insertPaymentRequestToSupabase(input: {
+  name?: string;
+  phone: string;
+  email: string;
+  plan: string;
+  amount: number;
+  days: number;
+  paymentMethod: string;
+  status?: AccountStatus;
+  expiry?: number;
+}): Promise<{ ok: boolean; user?: UserAccount; error?: string }> {
+  try {
+    const payload: PaymentRequestRecord = {
+      id: generateUuid(),
+      name: input.name?.trim() || null,
+      phone: input.phone.trim(),
+      email: input.email.trim(),
+      plan: input.plan.trim(),
+      amount: Number(input.amount || 0),
+      days: Math.max(1, Number(input.days || 1)),
+      payment_method: input.paymentMethod.trim() || 'Manual WhatsApp',
+      status: input.status || 'pending',
+      expiry: Number(input.expiry || 0),
+      created_at: new Date().toISOString(),
+    };
+
+    const { data, error } = await supabase
+      .from('payment_requests')
+      .insert([payload])
+      .select('*')
+      .single();
+
+    if (error || !data) {
+      return {
+        ok: false,
+        error: formatSupabaseError(error || { message: 'Supabase did not return saved row.' }),
+      };
+    }
+
+    return {
+      ok: true,
+      user: mapPaymentRequestRowToUser(data as PaymentRequestRecord),
+    };
+  } catch (err) {
+    return {
+      ok: false,
+      error: err instanceof Error ? err.message : 'Failed to insert into Supabase payment_requests.',
+    };
+  }
+}
+
+export async function updatePaymentRequestInSupabase(
+  id: string,
+  patch: Partial<Pick<PaymentRequestRecord, 'status' | 'expiry' | 'plan' | 'amount' | 'days' | 'payment_method'>>
+): Promise<{ ok: boolean; user?: UserAccount; error?: string }> {
+  try {
+    const { data, error } = await supabase
+      .from('payment_requests')
+      .update(patch)
+      .eq('id', id)
+      .select('*')
+      .single();
+
+    if (error || !data) {
+      return {
+        ok: false,
+        error: formatSupabaseError(error || { message: 'Could not update payment_requests row.' }),
+      };
+    }
+
+    return {
+      ok: true,
+      user: mapPaymentRequestRowToUser(data as PaymentRequestRecord),
+    };
+  } catch (err) {
+    return {
+      ok: false,
+      error: err instanceof Error ? err.message : 'Failed to update Supabase payment_requests.',
+    };
+  }
+}
+
+export async function deletePaymentRequestInSupabase(
+  id: string
+): Promise<{ ok: boolean; error?: string }> {
+  try {
+    const { error } = await supabase.from('payment_requests').delete().eq('id', id);
+    if (error) {
+      return { ok: false, error: formatSupabaseError(error) };
+    }
+    return { ok: true };
+  } catch (err) {
+    return {
+      ok: false,
+      error: err instanceof Error ? err.message : 'Failed to delete row from payment_requests.',
+    };
+  }
+}
+
 export function subscribeToSupabasePublicChanges(onChange: () => void): () => void {
   const channel = supabase
     .channel('vjemma-public-realtime')
     .on('postgres_changes', { event: '*', schema: 'public', table: 'movies' }, () => onChange())
     .on('postgres_changes', { event: '*', schema: 'public', table: 'site_settings' }, () => onChange())
+    .on('postgres_changes', { event: '*', schema: 'public', table: 'payment_requests' }, () => onChange())
     .subscribe();
 
   return () => {

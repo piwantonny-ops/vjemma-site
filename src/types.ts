@@ -40,7 +40,9 @@ export interface Movie {
   duration?: string;
   rating: string;
   category: string;
+  categories?: string[];
   genre?: string;
+  genres?: string[];
   actors?: string;
   label: MovieLabel | string;
   description: string;
@@ -68,6 +70,9 @@ export interface Season {
   actors?: string;
   description?: string;
   genre?: string;
+  genres?: string[];
+  category?: string;
+  categories?: string[];
 }
 
 export interface Episode {
@@ -154,6 +159,7 @@ export interface AppSettings {
   facebookUrl: string;
   tiktokUrl: string;
   genreLine?: string;
+  categoryLine?: string;
   movieTags: string[];
   paymentPlans: PaymentPlan[];
   priceWeekly: number;
@@ -165,6 +171,20 @@ export interface AppSettings {
   showPosterYear: boolean;
   showPosterActors: boolean;
   showPosterDescription: boolean;
+}
+
+export interface PaymentRequestRecord {
+  id: string;
+  name?: string | null;
+  phone: string;
+  email: string;
+  plan: string;
+  amount: number;
+  days: number;
+  payment_method: string;
+  status: AccountStatus;
+  expiry?: number | null;
+  created_at: string;
 }
 
 export interface AppState {

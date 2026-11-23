@@ -2,16 +2,18 @@ import React, { useEffect, useRef, useState } from 'react';
 import { Film } from 'lucide-react';
 import { uploadFileToR2 } from '../r2Upload';
 import {
+  DEFAULT_CATEGORY_LINE,
   DEFAULT_GENRE_LINE,
   LOCKED_ADMIN_EMAIL,
   normalizeSocialUrl,
+  parseCategoryLine,
   parseGenreLine,
   parseMovieGenres,
   resolveMediaUrl,
   sanitizeAssetUrl,
   useResolvedMedia,
 } from '../storage';
-import type { AdminTab, AppState, UserAccount } from '../types';
+import type { AdminTab, AppState } from '../types';
 
 interface AdminPanelProps {
   state: AppState;
@@ -19,6 +21,21 @@ interface AdminPanelProps {
   onViewSite: () => void;
   onLogout: () => void;
   onNotify: (msg: string) => void;
+  paymentRequestsError?: string | null;
+  onRefreshPaymentRequests?: () => Promise<void>;
+  onApprovePaymentRequest?: (
+    userId: string,
+    overridePlan?: string
+  ) => Promise<{ ok: boolean; error?: string }>;
+  onBlockPaymentRequest?: (userId: string) => Promise<{ ok: boolean; error?: string }>;
+  onDeletePaymentRequest?: (userId: string) => Promise<{ ok: boolean; error?: string }>;
+  onAddManualPaymentRequest?: (input: {
+    phone: string;
+    email: string;
+    plan: string;
+    amount: number;
+    days: number;
+  }) => Promise<{ ok: boolean; error?: string }>;
   initialEditMovieId?: string | null;
   onClearInitialEditMovie?: () => void;
   initialEditChannelId?: string | null;
@@ -50,6 +67,12 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
   onViewSite,
   onLogout,
   onNotify,
+  paymentRequestsError,
+  onRefreshPaymentRequests,
+  onApprovePaymentRequest,
+  onBlockPaymentRequest,
+  onDeletePaymentRequest,
+  onAddManualPaymentRequest,
   initialEditMovieId,
   onClearInitialEditMovie,
   initialEditChannelId,
@@ -64,6 +87,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
   const [movieDuration, setMovieDuration] = useState('');
   const [movieRating, setMovieRating] = useState('');
   const [movieGenre, setMovieGenre] = useState('');
+  const [movieCategory, setMovieCategory] = useState('');
   const [movieActors, setMovieActors] = useState('');
   const [movieLabel, setMovieLabel] = useState('');
   const [movieDescription, setMovieDescription] = useState('');
@@ -99,6 +123,8 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
   const [seasonSeriesTitle, setSeasonSeriesTitle] = useState('');
   const [seasonNumber, setSeasonNumber] = useState('');
   const [seasonLabel, setSeasonLabel] = useState('');
+  const [seasonGenre, setSeasonGenre] = useState('');
+  const [seasonCategory, setSeasonCategory] = useState('');
   const [seasonYear, setSeasonYear] = useState('');
   const [seasonDuration, setSeasonDuration] = useState('');
   const [seasonActors, setSeasonActors] = useState('');
@@ -137,6 +163,9 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
   const [setGenreLine, setSetGenreLine] = useState(
     state.settings.genreLine !== undefined ? state.settings.genreLine : DEFAULT_GENRE_LINE
   );
+  const [setCategoryLine, setSetCategoryLine] = useState(
+    state.settings.categoryLine !== undefined ? state.settings.categoryLine : DEFAULT_CATEGORY_LINE
+  );
   const [setR2Links, setSetR2Links] = useState<string[]>(() => {
     const arr = Array.isArray(state.settings.r2Links) ? state.settings.r2Links : [];
     return [0, 1, 2, 3, 4].map((i) => arr[i] ?? (i === 0 ? state.settings.r2Endpoint || '' : ''));
@@ -172,6 +201,9 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
     setSetAppName(state.settings.appName);
     setSetGenreLine(
       state.settings.genreLine !== undefined ? state.settings.genreLine : DEFAULT_GENRE_LINE
+    );
+    setSetCategoryLine(
+      state.settings.categoryLine !== undefined ? state.settings.categoryLine : DEFAULT_CATEGORY_LINE
     );
     const arr = Array.isArray(state.settings.r2Links) ? state.settings.r2Links : [];
     setSetR2Links([0, 1, 2, 3, 4].map((i) => arr[i] ?? (i === 0 ? state.settings.r2Endpoint || '' : '')));
@@ -220,6 +252,8 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
   const blockedClientsCount = state.users.filter((u) => u.status === 'blocked').length;
 
   const oneLineGenres = parseGenreLine(state.settings.genreLine);
+  const oneLineCategories = parseCategoryLine(state.settings.categoryLine);
+
   const selectedMovieGenres = parseMovieGenres(movieGenre);
   const availableMovieGenreChoices = Array.from(
     new Map(
@@ -227,14 +261,37 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
     ).values()
   );
 
-  const toggleMovieGenre = (genreName: string) => {
-    const targetKey = genreName.trim().toLowerCase();
-    const exists = selectedMovieGenres.some((g) => g.toLowerCase() === targetKey);
+  const selectedMovieCategories = parseMovieGenres(movieCategory);
+  const availableMovieCategoryChoices = Array.from(
+    new Map(
+      [...oneLineCategories, ...selectedMovieCategories].map((c) => [c.toLowerCase(), c])
+    ).values()
+  );
+
+  const selectedSeasonGenres = parseMovieGenres(seasonGenre);
+  const selectedSeasonCategories = parseMovieGenres(seasonCategory);
+
+  const toggleTagValue = (
+    currentSelected: string[],
+    tagName: string,
+    setter: (next: string) => void
+  ) => {
+    const targetKey = tagName.trim().toLowerCase();
+    const exists = currentSelected.some((g) => g.toLowerCase() === targetKey);
     const next = exists
-      ? selectedMovieGenres.filter((g) => g.toLowerCase() !== targetKey)
-      : [...selectedMovieGenres, genreName.trim()];
-    setMovieGenre(next.join(', '));
+      ? currentSelected.filter((g) => g.toLowerCase() !== targetKey)
+      : [...currentSelected, tagName.trim()];
+    setter(next.join(', '));
   };
+
+  const toggleMovieGenre = (genreName: string) =>
+    toggleTagValue(selectedMovieGenres, genreName, setMovieGenre);
+  const toggleMovieCategory = (categoryName: string) =>
+    toggleTagValue(selectedMovieCategories, categoryName, setMovieCategory);
+  const toggleSeasonGenre = (genreName: string) =>
+    toggleTagValue(selectedSeasonGenres, genreName, setSeasonGenre);
+  const toggleSeasonCategory = (categoryName: string) =>
+    toggleTagValue(selectedSeasonCategories, categoryName, setSeasonCategory);
 
   const configuredPaymentPlans =
     Array.isArray(state.settings.paymentPlans) && state.settings.paymentPlans.length > 0
@@ -376,6 +433,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
     setMovieDuration('');
     setMovieRating('');
     setMovieGenre('');
+    setMovieCategory('');
     setMovieActors('');
     setMovieLabel('');
     setMovieDescription('');
@@ -399,7 +457,10 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
 
   const commitMovieToStateAndSupabase = async (posterUrl: string, videoUrl: string) => {
     const title = movieTitle.trim();
-    const cleanGenre = parseMovieGenres(movieGenre).join(', ');
+    const cleanGenresList = parseMovieGenres(movieGenre);
+    const cleanGenre = cleanGenresList.join(', ');
+    const cleanCategoriesList = parseMovieGenres(movieCategory);
+    const cleanCategory = cleanCategoriesList.join(', ');
     const cleanLabel = movieLabel.trim();
     const cleanPosterInput = sanitizeAssetUrl(posterUrl) || sanitizeAssetUrl(moviePosterLink.trim()) || uploadedPosterRef;
     const cleanVideoInput = sanitizeAssetUrl(videoUrl) || sanitizeAssetUrl(movieVideoLink.trim()) || uploadedVideoRef;
@@ -416,8 +477,10 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
                   year: movieYear.trim(),
                   duration: movieDuration.trim(),
                   rating: movieRating.trim(),
-                  category: cleanGenre,
+                  category: cleanCategory,
+                  categories: cleanCategoriesList,
                   genre: cleanGenre,
+                  genres: cleanGenresList,
                   actors: movieActors.trim(),
                   label: cleanLabel,
                   description: movieDescription.trim(),
@@ -438,8 +501,10 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
             year: movieYear.trim(),
             duration: movieDuration.trim(),
             rating: movieRating.trim(),
-            category: cleanGenre,
+            category: cleanCategory,
+            categories: cleanCategoriesList,
             genre: cleanGenre,
+            genres: cleanGenresList,
             actors: movieActors.trim(),
             label: cleanLabel,
             description: movieDescription.trim(),
@@ -536,7 +601,8 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
     setMovieYear(m.year || '');
     setMovieDuration(m.duration || '');
     setMovieRating(m.rating || '');
-    setMovieGenre(parseMovieGenres(m.genre, m.category).join(', '));
+    setMovieGenre(parseMovieGenres(m.genres, m.genre).join(', '));
+    setMovieCategory(parseMovieGenres(m.categories, m.category).join(', '));
     setMovieActors(m.actors || '');
     setMovieLabel(m.label || '');
     setMovieDescription(m.description || '');
@@ -679,6 +745,8 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
     setSeasonSeriesTitle('');
     setSeasonNumber('');
     setSeasonLabel('');
+    setSeasonGenre('');
+    setSeasonCategory('');
     setSeasonYear('');
     setSeasonDuration('');
     setSeasonActors('');
@@ -725,6 +793,8 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
     }
 
     const cleanSeasonLabel = seasonLabel.trim();
+    const cleanSeasonGenres = parseMovieGenres(seasonGenre);
+    const cleanSeasonCategories = parseMovieGenres(seasonCategory);
 
     updateState((prev) => {
       if (editSeasonId) {
@@ -737,6 +807,10 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
                   seriesTitle,
                   seasonNumber: sNum,
                   label: cleanSeasonLabel,
+                  genre: cleanSeasonGenres.join(', '),
+                  genres: cleanSeasonGenres,
+                  category: cleanSeasonCategories.join(', '),
+                  categories: cleanSeasonCategories,
                   year: seasonYear.trim(),
                   duration: seasonDuration.trim(),
                   actors: seasonActors.trim(),
@@ -756,6 +830,10 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
             seriesTitle,
             seasonNumber: sNum,
             label: cleanSeasonLabel,
+            genre: cleanSeasonGenres.join(', '),
+            genres: cleanSeasonGenres,
+            category: cleanSeasonCategories.join(', '),
+            categories: cleanSeasonCategories,
             year: seasonYear.trim(),
             duration: seasonDuration.trim(),
             actors: seasonActors.trim(),
@@ -948,25 +1026,33 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
     onNotify('Live TV channel deleted.');
   };
 
-  /* --- ONE-LINE GENRE / CATEGORY HANDLER --- */
+  /* --- GENRES & CATEGORIES HANDLER --- */
   const saveGenreLine = () => {
-    const parsed = parseGenreLine(setGenreLine);
-    if (parsed.length === 0) {
+    const parsedGenres = parseGenreLine(setGenreLine);
+    const parsedCategories = parseCategoryLine(setCategoryLine);
+    if (parsedGenres.length === 0) {
       onNotify('Enter at least one genre separated by commas.');
       return;
     }
-    const cleanLine = parsed.join(', ');
-    setSetGenreLine(cleanLine);
+    if (parsedCategories.length === 0) {
+      onNotify('Enter at least one category separated by commas.');
+      return;
+    }
+    const cleanGenreLine = parsedGenres.join(', ');
+    const cleanCategoryLine = parsedCategories.join(', ');
+    setSetGenreLine(cleanGenreLine);
+    setSetCategoryLine(cleanCategoryLine);
     updateState((prev) => ({
       ...prev,
-      categories: parsed.map((name, idx) => ({ id: `cat_${idx}`, name })),
-      genres: parsed.map((name, idx) => ({ id: `gen_${idx}`, name })),
+      categories: parsedCategories.map((name, idx) => ({ id: `cat_${idx}`, name })),
+      genres: parsedGenres.map((name, idx) => ({ id: `gen_${idx}`, name })),
       settings: {
         ...prev.settings,
-        genreLine: cleanLine,
+        genreLine: cleanGenreLine,
+        categoryLine: cleanCategoryLine,
       },
     }));
-    onNotify('Genres updated & live instantly!');
+    onNotify('Genres & Categories updated & live instantly!');
   };
 
   /* --- PAYMENT PLANS CRUD (NAME, PRICE, DAYS) --- */
@@ -1126,16 +1212,22 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
     const cleanGenreLine =
       parsedGenres.length > 0 ? parsedGenres.join(', ') : DEFAULT_GENRE_LINE;
     const syncedGenres = parseGenreLine(cleanGenreLine);
+    const parsedCategories = parseCategoryLine(setCategoryLine);
+    const cleanCategoryLine =
+      parsedCategories.length > 0 ? parsedCategories.join(', ') : DEFAULT_CATEGORY_LINE;
+    const syncedCategories = parseCategoryLine(cleanCategoryLine);
     setSetGenreLine(cleanGenreLine);
+    setSetCategoryLine(cleanCategoryLine);
 
     updateState((prev) => ({
       ...prev,
-      categories: syncedGenres.map((name, idx) => ({ id: `cat_${idx}`, name })),
+      categories: syncedCategories.map((name, idx) => ({ id: `cat_${idx}`, name })),
       genres: syncedGenres.map((name, idx) => ({ id: `gen_${idx}`, name })),
       settings: {
         ...prev.settings,
         appName: setAppName.trim() || 'VJ EMMA - TRUE LIGHT PRODUCTION',
         genreLine: cleanGenreLine,
+        categoryLine: cleanCategoryLine,
         r2Endpoint: cleanLinks[0] || '',
         r2Links: cleanLinks,
         pesapalKey: setPesapalKey.trim(),
@@ -1203,7 +1295,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
     return { amount: Number(state.settings.priceMonthly || 15000), days: 30 };
   };
 
-  const approveUser = (userId: string, overridePlan?: string) => {
+  const approveUser = async (userId: string, overridePlan?: string) => {
     const target = state.users.find((u) => u.id === userId);
     if (!target) return;
 
@@ -1213,148 +1305,54 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
       target.plan ||
       configuredPaymentPlans[0]?.name ||
       'Monthly';
-    const { amount: fallbackAmount, days: fallbackDays } = getPlanPricing(chosenPlan);
+    const { days: fallbackDays } = getPlanPricing(chosenPlan);
     const days = Math.max(1, Number(target.pendingDays || fallbackDays || 1));
-    const wasActive = Boolean(target.subscribed && target.expiry > Date.now());
-    const shouldCredit = target.status === 'pending' || !wasActive;
-    const creditAmount = shouldCredit ? Number(target.pendingAmount || fallbackAmount) : 0;
-    const expiry = Date.now() + days * 86400000;
 
-    updateState((prev) => {
-      const nextUsers: UserAccount[] = prev.users.map((u) =>
-        u.id === userId
-          ? {
-              ...u,
-              status: 'approved',
-              subscribed: true,
-              plan: chosenPlan,
-              pendingPlan: null,
-              pendingAmount: 0,
-              pendingDays: 0,
-              expiry,
-            }
-          : u
-      );
-      const now = Date.now();
-      const subscribedCount = nextUsers.filter(
-        (u) => u.subscribed && u.status !== 'blocked' && u.expiry > now
-      ).length;
-      const nextTx = creditAmount
-        ? [
-            {
-              id: 'tx_' + now,
-              name: target.name,
-              phone: target.phone,
-              email: target.email,
-              plan: chosenPlan,
-              amount: creditAmount,
-              method: target.paymentMethod || 'Manual WhatsApp Approved',
-              status: 'completed' as const,
-              createdAt: now,
-            },
-            ...(prev.walletTransactions || []),
-          ]
-        : prev.walletTransactions || [];
-
-      const matchesCurrent =
-        prev.currentUser &&
-        prev.currentUser.role !== 'admin' &&
-        (prev.currentUser.id === target.id ||
-          prev.currentUser.phone === target.phone ||
-          prev.currentUser.email.toLowerCase() === target.email.toLowerCase());
-
-      return {
-        ...prev,
-        users: nextUsers,
-        clients: Math.max(prev.clients, subscribedCount),
-        wallet: prev.wallet + creditAmount,
-        walletTransactions: nextTx,
-        currentUser: matchesCurrent && prev.currentUser
-          ? {
-              ...prev.currentUser,
-              subscribed: true,
-              plan: chosenPlan,
-              status: 'approved',
-              expiry,
-            }
-          : prev.currentUser,
-      };
-    });
-
-    onNotify(`Approved ${target.phone} (${chosenPlan} · ${days} ${days === 1 ? 'Day' : 'Days'}).`);
+    if (onApprovePaymentRequest) {
+      const res = await onApprovePaymentRequest(userId, chosenPlan);
+      if (res.ok) {
+        onNotify(`Approved ${target.phone} (${chosenPlan} · ${days} ${days === 1 ? 'Day' : 'Days'}).`);
+      } else {
+        onNotify(`Supabase error: ${res.error || 'Could not approve client.'}`);
+      }
+      return;
+    }
+    onNotify('Supabase payment_requests handler unavailable.');
   };
 
-  const blockUser = (userId: string) => {
+  const blockUser = async (userId: string) => {
     const target = state.users.find((u) => u.id === userId);
     if (!target) return;
 
-    updateState((prev) => {
-      const nextUsers: UserAccount[] = prev.users.map((u) =>
-        u.id === userId
-          ? {
-              ...u,
-              status: 'blocked',
-              subscribed: false,
-            }
-          : u
-      );
-      const now = Date.now();
-      const subscribedCount = nextUsers.filter(
-        (u) => u.subscribed && u.status !== 'blocked' && u.expiry > now
-      ).length;
-      const matchesCurrent =
-        prev.currentUser &&
-        prev.currentUser.role !== 'admin' &&
-        (prev.currentUser.id === target.id ||
-          prev.currentUser.phone === target.phone ||
-          prev.currentUser.email.toLowerCase() === target.email.toLowerCase());
-
-      return {
-        ...prev,
-        users: nextUsers,
-        clients: subscribedCount,
-        currentUser: matchesCurrent && prev.currentUser
-          ? {
-              ...prev.currentUser,
-              subscribed: false,
-              status: 'blocked',
-            }
-          : prev.currentUser,
-      };
-    });
-
-    onNotify(`Blocked ${target.phone}.`);
+    if (onBlockPaymentRequest) {
+      const res = await onBlockPaymentRequest(userId);
+      if (res.ok) {
+        onNotify(`Blocked ${target.phone}.`);
+      } else {
+        onNotify(`Supabase error: ${res.error || 'Could not block client.'}`);
+      }
+      return;
+    }
+    onNotify('Supabase payment_requests handler unavailable.');
   };
 
-  const deleteUser = (userId: string) => {
+  const deleteUser = async (userId: string) => {
     const target = state.users.find((u) => u.id === userId);
     if (!target) return;
 
-    updateState((prev) => {
-      const nextUsers = prev.users.filter((u) => u.id !== userId);
-      const now = Date.now();
-      const subscribedCount = nextUsers.filter(
-        (u) => u.subscribed && u.status !== 'blocked' && u.expiry > now
-      ).length;
-      const matchesCurrent =
-        prev.currentUser &&
-        prev.currentUser.role !== 'admin' &&
-        (prev.currentUser.id === target.id ||
-          prev.currentUser.phone === target.phone ||
-          prev.currentUser.email.toLowerCase() === target.email.toLowerCase());
-
-      return {
-        ...prev,
-        users: nextUsers,
-        clients: subscribedCount,
-        currentUser: matchesCurrent ? null : prev.currentUser,
-      };
-    });
-
-    onNotify(`Deleted user ${target.phone}.`);
+    if (onDeletePaymentRequest) {
+      const res = await onDeletePaymentRequest(userId);
+      if (res.ok) {
+        onNotify(`Deleted payment request ${target.phone}.`);
+      } else {
+        onNotify(`Supabase error: ${res.error || 'Could not delete row.'}`);
+      }
+      return;
+    }
+    onNotify('Supabase payment_requests handler unavailable.');
   };
 
-  const addManualClient = () => {
+  const addManualClient = async () => {
     const phone = newClientPhone.trim();
     const email = newClientEmail.trim();
     if (!phone || !email) {
@@ -1363,64 +1361,27 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
     }
     const { amount, days } = getPlanPricing(newClientPlan);
     const validDays = Math.max(1, Number(days || 1));
-    const expiry = Date.now() + validDays * 86400000;
 
-    updateState((prev) => {
-      const existingIdx = prev.users.findIndex(
-        (u) => u.phone === phone || u.email.toLowerCase() === email.toLowerCase()
-      );
-      const nextUsers = [...prev.users];
-      if (existingIdx === -1) {
-        nextUsers.unshift({
-          id: 'usr_' + Date.now(),
-          phone,
-          email,
-          password: '',
-          subscribed: true,
-          plan: newClientPlan,
-          paymentMethod: 'Admin Manual Approval',
-          status: 'approved',
-          expiry,
-          createdAt: Date.now(),
-        });
-      } else {
-        nextUsers[existingIdx] = {
-          ...nextUsers[existingIdx],
-          phone,
-          email,
-          subscribed: true,
-          plan: newClientPlan,
-          paymentMethod: 'Admin Manual Approval',
-          status: 'approved',
-          expiry,
-        };
-      }
-      const now = Date.now();
-      const subscribedCount = nextUsers.filter(
-        (u) => u.subscribed && u.status !== 'blocked' && u.expiry > now
-      ).length;
-      const nextTx = {
-        id: 'tx_' + now,
+    if (onAddManualPaymentRequest) {
+      const res = await onAddManualPaymentRequest({
         phone,
         email,
         plan: newClientPlan,
         amount,
-        method: 'Admin Manual Approval',
-        status: 'completed' as const,
-        createdAt: now,
-      };
-      return {
-        ...prev,
-        users: nextUsers,
-        clients: Math.max(prev.clients, subscribedCount),
-        wallet: prev.wallet + amount,
-        walletTransactions: [nextTx, ...(prev.walletTransactions || [])],
-      };
-    });
-
-    setNewClientPhone('');
-    setNewClientEmail('');
-    onNotify(`Client ${phone} added & approved (${newClientPlan} · ${validDays} ${validDays === 1 ? 'Day' : 'Days'}).`);
+        days: validDays,
+      });
+      if (res.ok) {
+        setNewClientPhone('');
+        setNewClientEmail('');
+        onNotify(
+          `Client ${phone} saved to Supabase payment_requests (${newClientPlan} · ${validDays} ${validDays === 1 ? 'Day' : 'Days'}).`
+        );
+      } else {
+        onNotify(`Supabase error: ${res.error || 'Could not add client.'}`);
+      }
+      return;
+    }
+    onNotify('Supabase payment_requests handler unavailable.');
   };
 
   const adjustWallet = (mode: 'add' | 'withdraw') => {
@@ -1454,10 +1415,16 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
 
   const switchAdminTab = (tab: AdminTab) => {
     setActiveTab(tab);
+    if (tab === 'clients') {
+      onRefreshPaymentRequests?.();
+    }
     if (tab === 'settings' || tab === 'categories') {
       setSetAppName(state.settings.appName);
       setSetGenreLine(
         state.settings.genreLine !== undefined ? state.settings.genreLine : DEFAULT_GENRE_LINE
+      );
+      setSetCategoryLine(
+        state.settings.categoryLine !== undefined ? state.settings.categoryLine : DEFAULT_CATEGORY_LINE
       );
       const arr = Array.isArray(state.settings.r2Links) ? state.settings.r2Links : [];
       setSetR2Links([0, 1, 2, 3, 4].map((i) => arr[i] ?? (i === 0 ? state.settings.r2Endpoint || '' : '')));
@@ -1838,17 +1805,39 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
 
           <div className="rounded-xl border border-[#d4af37]/30 bg-[#111018] p-4">
             <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
-              <h3 className="font-display text-base font-extrabold text-[#d4af37]">
-                Clients / Users ({state.users.length})
-              </h3>
-              <input
-                type="text"
-                value={clientSearch}
-                onChange={(e) => setClientSearch(e.target.value)}
-                placeholder="Search phone or email..."
-                className="min-h-[38px] w-full rounded-lg border border-[#6a0dad]/60 bg-[#08070c] px-3 py-1.5 text-xs text-white placeholder-white/40 sm:w-56"
-              />
+              <div>
+                <h3 className="font-display text-base font-extrabold text-[#d4af37]">
+                  Clients / Payment Requests ({state.users.length})
+                </h3>
+                <p className="text-[11px] text-[#b0aab8]">
+                  Loaded live from Supabase <span className="font-bold text-white">payment_requests</span> (newest first)
+                </p>
+              </div>
+              <div className="flex flex-wrap items-center gap-2">
+                {onRefreshPaymentRequests && (
+                  <button
+                    type="button"
+                    onClick={() => onRefreshPaymentRequests()}
+                    className="min-h-[38px] rounded-lg border border-[#d4af37] bg-[#6a0dad] px-3 py-1.5 text-xs font-bold text-[#f0cf65]"
+                  >
+                    Refresh Supabase
+                  </button>
+                )}
+                <input
+                  type="text"
+                  value={clientSearch}
+                  onChange={(e) => setClientSearch(e.target.value)}
+                  placeholder="Search name, phone or email..."
+                  className="min-h-[38px] w-full rounded-lg border border-[#6a0dad]/60 bg-[#08070c] px-3 py-1.5 text-xs text-white placeholder-white/40 sm:w-56"
+                />
+              </div>
             </div>
+
+            {paymentRequestsError && (
+              <div className="mb-3 rounded-lg border border-rose-500/70 bg-rose-950/60 p-3 text-xs font-semibold text-rose-200">
+                Supabase payment_requests error: {paymentRequestsError}
+              </div>
+            )}
 
             <div className="mb-3 flex flex-wrap gap-2">
               {(
@@ -1876,7 +1865,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
 
             {state.users.length === 0 ? (
               <p className="text-xs text-[#b0aab8]">
-                No clients or users yet. Users who sign in, pay via Pesapal, or submit Manual WhatsApp payments appear here.
+                No payment requests yet. Submissions from Pesapal or Manual WhatsApp appear here newest-first.
               </p>
             ) : (
               <div className="space-y-2.5">
@@ -1887,6 +1876,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
                     const q = clientSearch.trim().toLowerCase();
                     const matchesQuery =
                       !q ||
+                      (u.name || '').toLowerCase().includes(q) ||
                       u.phone.toLowerCase().includes(q) ||
                       u.email.toLowerCase().includes(q);
                     return matchesFilter && matchesQuery;
@@ -2152,9 +2142,9 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
 
               <div>
                 <label className={labelCls}>
-                  Genres (Multi-Select · Tap to Pick One or Many)
+                  Genres (Multi-Select · Check One, Two, Three or Many)
                 </label>
-                <div className="grid grid-cols-2 gap-2 rounded-lg border border-[#6a0dad]/60 bg-[#0a090f] p-2.5 sm:grid-cols-3">
+                <div className="grid max-h-[240px] grid-cols-2 gap-2 overflow-y-auto rounded-lg border border-[#6a0dad]/60 bg-[#0a090f] p-2.5 sm:grid-cols-3">
                   {availableMovieGenreChoices.map((g) => {
                     const checked = selectedMovieGenres.some(
                       (item) => item.toLowerCase() === g.toLowerCase()
@@ -2181,7 +2171,43 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
                 </div>
                 {selectedMovieGenres.length > 0 && (
                   <p className="mt-1.5 text-[11px] font-semibold text-[#f0cf65]">
-                    Selected: {selectedMovieGenres.join(' + ')}
+                    Selected Genres ({selectedMovieGenres.length}): {selectedMovieGenres.join(' + ')}
+                  </p>
+                )}
+              </div>
+
+              <div>
+                <label className={labelCls}>
+                  Categories (Multi-Select · Check One, Two, Three or Many)
+                </label>
+                <div className="grid max-h-[200px] grid-cols-2 gap-2 overflow-y-auto rounded-lg border border-[#6a0dad]/60 bg-[#0a090f] p-2.5 sm:grid-cols-3">
+                  {availableMovieCategoryChoices.map((c) => {
+                    const checked = selectedMovieCategories.some(
+                      (item) => item.toLowerCase() === c.toLowerCase()
+                    );
+                    return (
+                      <label
+                        key={`mov-cat-${c}`}
+                        className={`flex min-h-[38px] cursor-pointer items-center gap-2 rounded-md border px-2.5 py-1.5 text-xs font-bold transition-colors ${
+                          checked
+                            ? 'border-[#d4af37] bg-[#6a0dad]/70 text-[#f0cf65]'
+                            : 'border-white/10 bg-[#12101b] text-white/80 hover:border-[#6a0dad]'
+                        }`}
+                      >
+                        <input
+                          type="checkbox"
+                          checked={checked}
+                          onChange={() => toggleMovieCategory(c)}
+                          className="h-4 w-4 accent-[#d4af37]"
+                        />
+                        <span className="truncate">{c}</span>
+                      </label>
+                    );
+                  })}
+                </div>
+                {selectedMovieCategories.length > 0 && (
+                  <p className="mt-1.5 text-[11px] font-semibold text-[#f0cf65]">
+                    Selected Categories ({selectedMovieCategories.length}): {selectedMovieCategories.join(' + ')}
                   </p>
                 )}
               </div>
@@ -2672,6 +2698,62 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
                 />
               </div>
               <div>
+                <label className={labelCls}>Genres (Multi-Select · Check One or Many)</label>
+                <div className="grid max-h-[210px] grid-cols-2 gap-2 overflow-y-auto rounded-lg border border-[#6a0dad]/60 bg-[#0a090f] p-2.5 sm:grid-cols-3">
+                  {oneLineGenres.map((g) => {
+                    const checked = selectedSeasonGenres.some(
+                      (item) => item.toLowerCase() === g.toLowerCase()
+                    );
+                    return (
+                      <label
+                        key={`sea-gen-${g}`}
+                        className={`flex min-h-[36px] cursor-pointer items-center gap-2 rounded-md border px-2.5 py-1 text-xs font-bold transition-colors ${
+                          checked
+                            ? 'border-[#d4af37] bg-[#6a0dad]/70 text-[#f0cf65]'
+                            : 'border-white/10 bg-[#12101b] text-white/80'
+                        }`}
+                      >
+                        <input
+                          type="checkbox"
+                          checked={checked}
+                          onChange={() => toggleSeasonGenre(g)}
+                          className="h-4 w-4 accent-[#d4af37]"
+                        />
+                        <span className="truncate">{g}</span>
+                      </label>
+                    );
+                  })}
+                </div>
+              </div>
+              <div>
+                <label className={labelCls}>Categories (Multi-Select · Check One or Many)</label>
+                <div className="grid max-h-[180px] grid-cols-2 gap-2 overflow-y-auto rounded-lg border border-[#6a0dad]/60 bg-[#0a090f] p-2.5 sm:grid-cols-3">
+                  {oneLineCategories.map((c) => {
+                    const checked = selectedSeasonCategories.some(
+                      (item) => item.toLowerCase() === c.toLowerCase()
+                    );
+                    return (
+                      <label
+                        key={`sea-cat-${c}`}
+                        className={`flex min-h-[36px] cursor-pointer items-center gap-2 rounded-md border px-2.5 py-1 text-xs font-bold transition-colors ${
+                          checked
+                            ? 'border-[#d4af37] bg-[#6a0dad]/70 text-[#f0cf65]'
+                            : 'border-white/10 bg-[#12101b] text-white/80'
+                        }`}
+                      >
+                        <input
+                          type="checkbox"
+                          checked={checked}
+                          onChange={() => toggleSeasonCategory(c)}
+                          className="h-4 w-4 accent-[#d4af37]"
+                        />
+                        <span className="truncate">{c}</span>
+                      </label>
+                    );
+                  })}
+                </div>
+              </div>
+              <div>
                 <label className={labelCls}>Poster Label (Optional) — e.g. VIP</label>
                 <input
                   type="text"
@@ -2782,6 +2864,8 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
                           setSeasonSeriesTitle(s.seriesTitle);
                           setSeasonNumber(s.seasonNumber);
                           setSeasonLabel(s.label || '');
+                          setSeasonGenre(parseMovieGenres(s.genres, s.genre).join(', '));
+                          setSeasonCategory(parseMovieGenres(s.categories, s.category).join(', '));
                           setSeasonYear(s.year || '');
                           setSeasonDuration(s.duration || '');
                           setSeasonActors(s.actors || '');
@@ -3143,32 +3227,43 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
         </div>
       )}
 
-      {/* TAB 4: ONE-LINE GENRE / CATEGORY */}
+      {/* TAB 4: GENRES & CATEGORIES */}
       {activeTab === 'categories' && (
         <div className="space-y-4">
-          <div className="rounded-xl border border-[#d4af37]/30 bg-[#111018] p-4">
-            <h3 className="mb-1 font-display text-base font-extrabold text-[#d4af37]">
-              Genres / Categories (One Single Line)
-            </h3>
-            <p className="mb-3 text-xs text-[#b0aab8]">
-              Add or remove genres anytime in this single line, separated by commas. Changes update instantly for customers and movie upload.
-            </p>
-            <div className="flex flex-wrap gap-2">
-              <input
-                type="text"
+          <div className="rounded-xl border border-[#d4af37]/30 bg-[#111018] p-4 space-y-4">
+            <div>
+              <h3 className="mb-1 font-display text-base font-extrabold text-[#d4af37]">
+                Genres ({oneLineGenres.length}) &amp; Categories ({oneLineCategories.length})
+              </h3>
+              <p className="text-xs text-[#b0aab8]">
+                Add or remove Genres and Categories below, separated by commas. Movies &amp; Series support multiple Genres and multiple Categories simultaneously.
+              </p>
+            </div>
+            <div>
+              <label className={labelCls}>Genres List (Comma-Separated)</label>
+              <textarea
                 value={setGenreLine}
                 onChange={(e) => setSetGenreLine(e.target.value)}
                 placeholder={DEFAULT_GENRE_LINE}
-                className={`${inputCls} min-w-[240px] flex-1`}
+                className={`${inputCls} min-h-[76px] resize-y`}
               />
-              <button
-                type="button"
-                onClick={saveGenreLine}
-                className="min-h-[42px] shrink-0 rounded-lg bg-gradient-to-br from-[#d4af37] to-[#b58d1e] px-5 py-2 text-xs font-extrabold text-black"
-              >
-                Save Genres
-              </button>
             </div>
+            <div>
+              <label className={labelCls}>Categories List (Comma-Separated)</label>
+              <textarea
+                value={setCategoryLine}
+                onChange={(e) => setSetCategoryLine(e.target.value)}
+                placeholder={DEFAULT_CATEGORY_LINE}
+                className={`${inputCls} min-h-[64px] resize-y`}
+              />
+            </div>
+            <button
+              type="button"
+              onClick={saveGenreLine}
+              className="min-h-[42px] shrink-0 rounded-lg bg-gradient-to-br from-[#d4af37] to-[#b58d1e] px-5 py-2 text-xs font-extrabold text-black"
+            >
+              Save Genres &amp; Categories
+            </button>
           </div>
         </div>
       )}
@@ -3693,7 +3788,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
                   <label className="mb-1 block text-[11px] font-bold text-[#f0cf65]">
                     Genres (Multi-Select · Tap to Pick One or Many)
                   </label>
-                  <div className="grid grid-cols-2 gap-1.5 rounded-lg border border-[#6a0dad]/50 bg-[#0a090f] p-2 sm:grid-cols-3">
+                  <div className="grid max-h-[210px] grid-cols-2 gap-1.5 overflow-y-auto rounded-lg border border-[#6a0dad]/50 bg-[#0a090f] p-2 sm:grid-cols-3">
                     {availableMovieGenreChoices.map((g) => {
                       const checked = selectedMovieGenres.some(
                         (item) => item.toLowerCase() === g.toLowerCase()
@@ -3714,6 +3809,36 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
                             className="h-3.5 w-3.5 accent-[#d4af37]"
                           />
                           <span className="truncate">{g}</span>
+                        </label>
+                      );
+                    })}
+                  </div>
+                </div>
+                <div>
+                  <label className="mb-1 block text-[11px] font-bold text-[#f0cf65]">
+                    Categories (Multi-Select · Tap to Pick One or Many)
+                  </label>
+                  <div className="grid max-h-[180px] grid-cols-2 gap-1.5 overflow-y-auto rounded-lg border border-[#6a0dad]/50 bg-[#0a090f] p-2 sm:grid-cols-3">
+                    {availableMovieCategoryChoices.map((c) => {
+                      const checked = selectedMovieCategories.some(
+                        (item) => item.toLowerCase() === c.toLowerCase()
+                      );
+                      return (
+                        <label
+                          key={`set-cat-${c}`}
+                          className={`flex min-h-[34px] cursor-pointer items-center gap-1.5 rounded-md border px-2 py-1 text-[11px] font-bold transition-colors ${
+                            checked
+                              ? 'border-[#d4af37] bg-[#6a0dad]/70 text-[#f0cf65]'
+                              : 'border-white/10 bg-[#12101b] text-white/80'
+                          }`}
+                        >
+                          <input
+                            type="checkbox"
+                            checked={checked}
+                            onChange={() => toggleMovieCategory(c)}
+                            className="h-3.5 w-3.5 accent-[#d4af37]"
+                          />
+                          <span className="truncate">{c}</span>
                         </label>
                       );
                     })}
@@ -3914,30 +4039,41 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
             </div>
           </div>
 
-          {/* 5B. GENRE / CATEGORY - ONE SINGLE LINE INSIDE SETTINGS */}
-          <div className="rounded-xl border-2 border-[#d4af37]/50 bg-[#111018] p-4">
-            <h3 className="mb-1 font-display text-base font-extrabold text-[#d4af37]">
-              Genres / Categories (One Single Line)
-            </h3>
-            <p className="mb-3 text-xs text-[#b0aab8]">
-              Edit this single line to add or remove genres anytime, separated by commas. Updates apply instantly for customers and movie upload.
-            </p>
-            <div className="flex flex-wrap gap-2">
-              <input
-                type="text"
+          {/* 5B. GENRES & CATEGORIES INSIDE SETTINGS */}
+          <div className="rounded-xl border-2 border-[#d4af37]/50 bg-[#111018] p-4 space-y-3">
+            <div>
+              <h3 className="mb-1 font-display text-base font-extrabold text-[#d4af37]">
+                Genres &amp; Categories Lists
+              </h3>
+              <p className="text-xs text-[#b0aab8]">
+                Edit Genres or Categories anytime, separated by commas. Updates apply instantly for customers and movie upload.
+              </p>
+            </div>
+            <div>
+              <label className={labelCls}>Genres (Comma-Separated)</label>
+              <textarea
                 value={setGenreLine}
                 onChange={(e) => setSetGenreLine(e.target.value)}
                 placeholder={DEFAULT_GENRE_LINE}
-                className={`${inputCls} min-w-[240px] flex-1`}
+                className={`${inputCls} min-h-[68px] resize-y`}
               />
-              <button
-                type="button"
-                onClick={saveGenreLine}
-                className="min-h-[42px] shrink-0 rounded-lg bg-gradient-to-br from-[#d4af37] to-[#b58d1e] px-5 py-2 text-xs font-extrabold text-black"
-              >
-                Save Genres
-              </button>
             </div>
+            <div>
+              <label className={labelCls}>Categories (Comma-Separated)</label>
+              <textarea
+                value={setCategoryLine}
+                onChange={(e) => setSetCategoryLine(e.target.value)}
+                placeholder={DEFAULT_CATEGORY_LINE}
+                className={`${inputCls} min-h-[58px] resize-y`}
+              />
+            </div>
+            <button
+              type="button"
+              onClick={saveGenreLine}
+              className="min-h-[42px] shrink-0 rounded-lg bg-gradient-to-br from-[#d4af37] to-[#b58d1e] px-5 py-2 text-xs font-extrabold text-black"
+            >
+              Save Genres &amp; Categories
+            </button>
           </div>
 
           {/* 5C. GENERAL APP & WHATSAPP API SETTINGS */}

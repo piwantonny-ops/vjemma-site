@@ -31,9 +31,13 @@ import {
 } from './storage';
 import { clearOldCachesAndCheckUpdates } from './cacheSync';
 import {
+  deletePaymentRequestInSupabase,
+  fetchPaymentRequestsFromSupabase,
   fetchSupabasePublicState,
+  insertPaymentRequestToSupabase,
   subscribeToSupabasePublicChanges,
   syncStateChangesToSupabase,
+  updatePaymentRequestInSupabase,
 } from './supabaseClient';
 import type { AppState, AppView, InfoModalType, LiveTvChannel, PendingPlan, PlayerMedia, Season } from './types';
 
@@ -65,6 +69,7 @@ export default function App() {
   const [adminEditMovieId, setAdminEditMovieId] = useState<string | null>(null);
   const [adminEditChannelId, setAdminEditChannelId] = useState<string | null>(null);
   const [isCatalogLoading, setIsCatalogLoading] = useState(true);
+  const [paymentRequestsError, setPaymentRequestsError] = useState<string | null>(null);
   const latestStateRef = useRef<AppState>(state);
   latestStateRef.current = state;
 
@@ -94,27 +99,96 @@ export default function App() {
     return true;
   }, []);
 
+  const refreshPaymentRequests = useCallback(async () => {
+    const res = await fetchPaymentRequestsFromSupabase();
+    if (!res.ok) {
+      setPaymentRequestsError(res.error || 'Could not load payment_requests from Supabase.');
+      return false;
+    }
+    setPaymentRequestsError(null);
+    const now = Date.now();
+    const activeClientsCount = res.users.filter(
+      (u) => u.status === 'approved' && u.subscribed && u.expiry > now
+    ).length;
+
+    setState((prev) => {
+      let nextCurrentUser = prev.currentUser;
+      if (prev.currentUser && prev.currentUser.role !== 'admin') {
+        const curEmail = prev.currentUser.email.toLowerCase();
+        const curPhone = prev.currentUser.phone;
+        const matches = res.users.filter(
+          (u) =>
+            (prev.currentUser?.id && u.id === prev.currentUser.id) ||
+            (curEmail && u.email.toLowerCase() === curEmail) ||
+            (curPhone && u.phone === curPhone)
+        );
+        if (matches.length > 0) {
+          const blockedMatch = matches.find((u) => u.status === 'blocked');
+          const activeMatch = matches.find(
+            (u) => u.status === 'approved' && u.subscribed && u.expiry > now
+          );
+          const pendingMatch = matches.find((u) => u.status === 'pending');
+          const bestMatch = blockedMatch || activeMatch || pendingMatch || matches[0];
+          nextCurrentUser = {
+            ...prev.currentUser,
+            id: bestMatch.id,
+            name: bestMatch.name || prev.currentUser.name,
+            subscribed: Boolean(activeMatch),
+            plan: activeMatch ? activeMatch.plan : null,
+            status: blockedMatch
+              ? 'blocked'
+              : activeMatch
+                ? 'approved'
+                : pendingMatch
+                  ? 'pending'
+                  : bestMatch.status,
+            expiry: activeMatch ? activeMatch.expiry : 0,
+          };
+        }
+      }
+
+      const next: AppState = {
+        ...prev,
+        users: res.users,
+        walletTransactions: res.transactions,
+        wallet: res.wallet,
+        clients: activeClientsCount,
+        currentUser: nextCurrentUser,
+      };
+      latestStateRef.current = next;
+      saveState(next);
+      return next;
+    });
+    return true;
+  }, []);
+
   useEffect(() => {
     clearOldCachesAndCheckUpdates().finally(() => {
-      refreshFromSupabase(true).finally(() => setIsCatalogLoading(false));
+      Promise.all([refreshFromSupabase(true), refreshPaymentRequests()]).finally(() =>
+        setIsCatalogLoading(false)
+      );
     });
 
     const unsubRealtime = subscribeToSupabasePublicChanges(() => {
       refreshFromSupabase(false);
+      refreshPaymentRequests();
     });
 
     const onVisibility = () => {
       if (document.visibilityState === 'visible') {
         clearOldCachesAndCheckUpdates();
         refreshFromSupabase(false);
+        refreshPaymentRequests();
       }
     };
     const onFocusOrShow = () => {
       clearOldCachesAndCheckUpdates();
       refreshFromSupabase(false);
+      refreshPaymentRequests();
     };
     const onOnline = () => {
       refreshFromSupabase(true);
+      refreshPaymentRequests();
     };
 
     document.addEventListener('visibilitychange', onVisibility);
@@ -124,6 +198,7 @@ export default function App() {
 
     const pollId = window.setInterval(() => {
       refreshFromSupabase(false);
+      refreshPaymentRequests();
     }, 20000);
 
     return () => {
@@ -134,22 +209,19 @@ export default function App() {
       window.removeEventListener('online', onOnline);
       window.clearInterval(pollId);
     };
-  }, [refreshFromSupabase]);
+  }, [refreshFromSupabase, refreshPaymentRequests]);
 
   useEffect(() => {
     const syncFromStorage = () => {
       const fresh = loadState();
       setState((prev) => ({
         ...prev,
-        wallet: fresh.wallet,
-        walletTransactions: fresh.walletTransactions,
-        clients: fresh.clients,
-        users: fresh.users,
         adminPassword: fresh.adminPassword,
         isAdminLoggedIn: prev.isAdminLoggedIn,
         currentUser: prev.isAdminLoggedIn ? prev.currentUser : fresh.currentUser,
       }));
       refreshFromSupabase(false);
+      refreshPaymentRequests();
     };
 
     const onStorage = (e: StorageEvent) => {
@@ -169,7 +241,7 @@ export default function App() {
       window.removeEventListener('storage', onStorage);
       bc?.close();
     };
-  }, [refreshFromSupabase]);
+  }, [refreshFromSupabase, refreshPaymentRequests]);
 
   useEffect(() => {
     const onPopState = () => {
@@ -190,9 +262,9 @@ export default function App() {
 
   const handleManualRefresh = useCallback(async () => {
     await clearOldCachesAndCheckUpdates();
-    const updated = await refreshFromSupabase(true);
+    const [updated] = await Promise.all([refreshFromSupabase(true), refreshPaymentRequests()]);
     showToast(updated ? 'Updated with latest movies & series!' : 'Catalog is up to date.');
-  }, [refreshFromSupabase, showToast]);
+  }, [refreshFromSupabase, refreshPaymentRequests, showToast]);
 
   useEffect(() => {
     if (!toastMessage) return;
@@ -273,37 +345,50 @@ export default function App() {
           },
         ];
 
-  const liveCustomerAccount =
+  const nowTs = Date.now();
+  const matchingCustomerRows =
     state.currentUser && state.currentUser.role !== 'admin'
-      ? state.users.find(
+      ? state.users.filter(
           (u) =>
             (state.currentUser?.id && u.id === state.currentUser.id) ||
-            u.email.toLowerCase() === state.currentUser?.email.toLowerCase() ||
-            u.phone === state.currentUser?.phone
+            (state.currentUser?.email &&
+              u.email.toLowerCase() === state.currentUser.email.toLowerCase()) ||
+            (state.currentUser?.phone && u.phone === state.currentUser.phone)
         )
-      : undefined;
+      : [];
+
+  const blockedCustomerRow = matchingCustomerRows.find((u) => u.status === 'blocked');
+  const activeApprovedRow = matchingCustomerRows.find(
+    (u) => u.status === 'approved' && u.subscribed && u.expiry > nowTs
+  );
+  const pendingCustomerRow = matchingCustomerRows.find((u) => u.status === 'pending');
+  const liveCustomerAccount =
+    blockedCustomerRow || activeApprovedRow || pendingCustomerRow || matchingCustomerRows[0];
 
   const isBlocked = Boolean(
     state.currentUser &&
       state.currentUser.role !== 'admin' &&
-      (liveCustomerAccount?.status === 'blocked' || state.currentUser.status === 'blocked')
+      (blockedCustomerRow || state.currentUser.status === 'blocked')
   );
 
   const isPendingApproval = Boolean(
     state.currentUser &&
       state.currentUser.role !== 'admin' &&
       !isBlocked &&
-      liveCustomerAccount?.status === 'pending' &&
-      (!liveCustomerAccount?.subscribed || liveCustomerAccount.expiry <= Date.now())
+      !activeApprovedRow &&
+      (pendingCustomerRow ||
+        (state.currentUser.status === 'pending' &&
+          (!state.currentUser.subscribed || state.currentUser.expiry <= nowTs)))
   );
 
   const isSubscribed = Boolean(
     state.isAdminLoggedIn ||
       (state.currentUser &&
         !isBlocked &&
-        (liveCustomerAccount
-          ? liveCustomerAccount.subscribed && liveCustomerAccount.expiry > Date.now()
-          : state.currentUser.subscribed && state.currentUser.expiry > Date.now()))
+        (activeApprovedRow ||
+          (!liveCustomerAccount &&
+            state.currentUser.subscribed &&
+            state.currentUser.expiry > nowTs)))
   );
 
   const handleHeaderAction = () => {
@@ -362,76 +447,51 @@ export default function App() {
       return;
     }
 
-    const existing = state.users.find(
-      (u) => u.email.toLowerCase() === email.toLowerCase() || u.phone === phone
+    const cleanPhone = phone.trim();
+    const cleanEmail = email.trim();
+    const matches = state.users.filter(
+      (u) => u.email.toLowerCase() === cleanEmail.toLowerCase() || u.phone === cleanPhone
     );
+    const blockedMatch = matches.find((u) => u.status === 'blocked');
 
-    if (existing && existing.status === 'blocked') {
+    if (blockedMatch) {
       setPendingPlansAfterAuth(false);
       showToast('Your account has been blocked by Admin.');
       return;
     }
 
-    if (existing && existing.password && existing.password !== password) {
+    const now = Date.now();
+    const activeMatch = matches.find(
+      (u) => u.status === 'approved' && u.subscribed && u.expiry > now
+    );
+    const pendingMatch = matches.find((u) => u.status === 'pending');
+    const bestMatch = activeMatch || pendingMatch || matches[0] || null;
+
+    if (bestMatch && bestMatch.password && bestMatch.password !== password) {
       showToast('Incorrect password.');
       return;
     }
 
-    let signedInRecordSubscribed = false;
-    let signedInRecordPending = false;
+    const signedInRecordSubscribed = Boolean(activeMatch);
+    const signedInRecordPending = Boolean(
+      pendingMatch && Boolean(pendingMatch.pendingPlan) && !signedInRecordSubscribed
+    );
 
-    updateState((prev) => {
-      const idx = prev.users.findIndex(
-        (u) => u.email.toLowerCase() === email.toLowerCase() || u.phone === phone
-      );
-      let userRecord = idx !== -1 ? prev.users[idx] : null;
-      let nextUsers = prev.users;
-
-      if (!userRecord) {
-        userRecord = {
-          id: 'usr_' + Date.now(),
-          phone,
-          email,
-          password,
-          subscribed: false,
-          plan: null,
-          status: 'pending',
-          expiry: 0,
-          createdAt: Date.now(),
-        };
-        nextUsers = [...prev.users, userRecord];
-      } else {
-        userRecord = { ...userRecord, phone, email };
-        nextUsers = prev.users.map((u, i) => (i === idx ? userRecord! : u));
-      }
-
-      const now = Date.now();
-      signedInRecordSubscribed = Boolean(
-        userRecord.subscribed && userRecord.expiry > now && userRecord.status !== 'blocked'
-      );
-      signedInRecordPending = Boolean(
-        userRecord.status === 'pending' &&
-          Boolean(userRecord.pendingPlan) &&
-          !signedInRecordSubscribed
-      );
-
-      return {
-        ...prev,
-        users: nextUsers,
-        isAdminLoggedIn: false,
-        currentUser: {
-          id: userRecord.id,
-          name: userRecord.name,
-          phone: userRecord.phone,
-          email: userRecord.email,
-          role: 'customer',
-          subscribed: userRecord.subscribed,
-          plan: userRecord.plan,
-          status: userRecord.status,
-          expiry: userRecord.expiry,
-        },
-      };
-    });
+    updateState((prev) => ({
+      ...prev,
+      isAdminLoggedIn: false,
+      currentUser: {
+        id: bestMatch?.id || 'cust_' + now,
+        name: bestMatch?.name,
+        phone: cleanPhone,
+        email: cleanEmail,
+        role: 'customer',
+        subscribed: signedInRecordSubscribed,
+        plan: activeMatch ? activeMatch.plan : null,
+        status: pendingMatch && !signedInRecordSubscribed ? 'pending' : 'approved',
+        expiry: activeMatch ? activeMatch.expiry : 0,
+      },
+    }));
 
     const openPlansNow = pendingPlansAfterAuth;
     const queuedVipTitle = pendingVipTitle;
@@ -602,6 +662,20 @@ export default function App() {
           };
         });
 
+        insertPaymentRequestToSupabase({
+          name: cleanName || undefined,
+          phone: cleanPhone || cleanEmail || 'Customer',
+          email: cleanEmail || `${cleanPhone}@vjemma.site`,
+          plan: planName,
+          amount,
+          days,
+          paymentMethod: method,
+          status: 'approved',
+          expiry: calculatedExpiry,
+        }).then((res) => {
+          if (res.ok) refreshPaymentRequests();
+        });
+
         try {
           localStorage.setItem(
             PROCESSED_PESAPAL_ORDERS_KEY,
@@ -622,7 +696,7 @@ export default function App() {
         email: cleanEmail,
       };
     },
-    [paymentPlans, state.currentUser, state.walletTransactions, updateState]
+    [paymentPlans, refreshPaymentRequests, state.currentUser, state.walletTransactions, updateState]
   );
 
   const handleReturnFromPaymentSuccess = useCallback(
@@ -641,124 +715,200 @@ export default function App() {
     []
   );
 
-  const recordWhatsappOrder = (
+  const recordWhatsappOrder = async (
     planObj: PendingPlan,
     phone: string,
     email: string,
     method: string,
     name?: string
-  ) => {
-    if (!phone || !email) {
-      showToast('Enter your phone number and email first.');
-      return;
+  ): Promise<{ ok: boolean; error?: string }> => {
+    const cleanPhone = phone.trim();
+    const cleanEmail = email.trim();
+    const cleanName = name?.trim() || undefined;
+    if (!cleanPhone || !cleanEmail) {
+      const msg = 'Enter your phone number and email first.';
+      showToast(msg);
+      return { ok: false, error: msg };
     }
 
     const existingBlocked = state.users.find(
-      (u) => (u.phone === phone || u.email.toLowerCase() === email.toLowerCase()) && u.status === 'blocked'
+      (u) =>
+        (u.phone === cleanPhone || u.email.toLowerCase() === cleanEmail.toLowerCase()) &&
+        u.status === 'blocked'
     );
     if (existingBlocked) {
-      showToast('This account has been blocked by Admin.');
-      return;
+      const msg = 'This account has been blocked by Admin.';
+      showToast(msg);
+      return { ok: false, error: msg };
     }
 
-    updateState((prev) => {
-      const now = Date.now();
-      const existingIdx = prev.users.findIndex(
-        (u) => u.phone === phone || u.email.toLowerCase() === email.toLowerCase()
-      );
-      const nextUsers = [...prev.users];
-      let userId = 'usr_' + now;
-      let stillActive = false;
-
-      if (existingIdx === -1) {
-        nextUsers.push({
-          id: userId,
-          name: name || undefined,
-          phone,
-          email,
-          password: '',
-          subscribed: false,
-          plan: null,
-          pendingPlan: planObj.planName,
-          pendingAmount: Number(planObj.amount),
-          pendingDays: Number(planObj.days || 1),
-          paymentMethod: `Manual WhatsApp (${method})`,
-          status: 'pending',
-          expiry: 0,
-          createdAt: now,
-        });
-      } else {
-        userId = nextUsers[existingIdx].id;
-        stillActive = Boolean(
-          nextUsers[existingIdx].subscribed && nextUsers[existingIdx].expiry > now
-        );
-        nextUsers[existingIdx] = {
-          ...nextUsers[existingIdx],
-          name: name || nextUsers[existingIdx].name,
-          phone,
-          email,
-          subscribed: stillActive,
-          pendingPlan: planObj.planName,
-          pendingAmount: Number(planObj.amount),
-          pendingDays: Number(planObj.days || 1),
-          paymentMethod: `Manual WhatsApp (${method})`,
-          status: stillActive ? 'approved' : 'pending',
-        };
-      }
-
-      const nextTx = {
-        id: 'tx_' + now,
-        name: name || undefined,
-        phone,
-        email,
-        plan: planObj.planName,
-        amount: Number(planObj.amount),
-        method: `Manual WhatsApp (${method})`,
-        status: 'pending' as const,
-        createdAt: now,
-      };
-
-      const prevCurrentActive = Boolean(
-        prev.currentUser?.subscribed && (prev.currentUser?.expiry || 0) > now
-      );
-
-      return {
-        ...prev,
-        users: nextUsers,
-        walletTransactions: [nextTx, ...(prev.walletTransactions || [])],
-        currentUser: prev.currentUser
-          ? {
-              ...prev.currentUser,
-              name: name || prev.currentUser.name,
-              subscribed: prevCurrentActive || stillActive,
-              status: prevCurrentActive || stillActive ? 'approved' : 'pending',
-            }
-          : {
-              id: userId,
-              name: name || undefined,
-              phone,
-              email,
-              role: 'customer',
-              subscribed: false,
-              plan: null,
-              status: 'pending',
-              expiry: 0,
-            },
-      };
+    const insertRes = await insertPaymentRequestToSupabase({
+      name: cleanName,
+      phone: cleanPhone,
+      email: cleanEmail,
+      plan: planObj.planName,
+      amount: Number(planObj.amount),
+      days: Math.max(1, Number(planObj.days || 1)),
+      paymentMethod: `Manual WhatsApp (${method})`,
+      status: 'pending',
+      expiry: 0,
     });
 
+    if (!insertRes.ok || !insertRes.user) {
+      const errMsg = insertRes.error || 'Could not save payment request to Supabase.';
+      setPaymentRequestsError(errMsg);
+      showToast(`Payment submit failed: ${errMsg}`);
+      return { ok: false, error: errMsg };
+    }
+
+    const savedRow = insertRes.user;
+    setPaymentRequestsError(null);
+
+    setState((prev) => {
+      const nextTx = {
+        id: `tx_${savedRow.id}`,
+        name: savedRow.name,
+        phone: savedRow.phone,
+        email: savedRow.email,
+        plan: savedRow.pendingPlan || planObj.planName,
+        amount: Number(savedRow.pendingAmount || planObj.amount),
+        method: savedRow.paymentMethod || `Manual WhatsApp (${method})`,
+        status: 'pending' as const,
+        createdAt: savedRow.createdAt || Date.now(),
+      };
+      const nextCurrent =
+        prev.currentUser && prev.currentUser.role !== 'admin'
+          ? {
+              ...prev.currentUser,
+              name: savedRow.name || prev.currentUser.name,
+              subscribed: Boolean(
+                prev.currentUser.subscribed && (prev.currentUser.expiry || 0) > Date.now()
+              ),
+              status:
+                prev.currentUser.subscribed && (prev.currentUser.expiry || 0) > Date.now()
+                  ? ('approved' as const)
+                  : ('pending' as const),
+            }
+          : prev.currentUser || {
+              id: savedRow.id,
+              name: savedRow.name,
+              phone: savedRow.phone,
+              email: savedRow.email,
+              role: 'customer' as const,
+              subscribed: false,
+              plan: null,
+              status: 'pending' as const,
+              expiry: 0,
+            };
+
+      const next: AppState = {
+        ...prev,
+        users: [savedRow, ...prev.users],
+        walletTransactions: [nextTx, ...(prev.walletTransactions || [])],
+        currentUser: nextCurrent,
+      };
+      latestStateRef.current = next;
+      saveState(next);
+      return next;
+    });
+
+    refreshPaymentRequests();
     showToast('WhatsApp payment request submitted! Pending Admin approval.');
+    return { ok: true };
   };
 
-  const handleManualWhatsappPayment = (
+  const handleManualWhatsappPayment = async (
     phone: string,
     email: string,
     method: string,
     name?: string
-  ) => {
-    if (!pendingPlan) return;
-    recordWhatsappOrder(pendingPlan, phone, email, method, name);
+  ): Promise<{ ok: boolean; error?: string }> => {
+    if (!pendingPlan) {
+      return { ok: false, error: 'No subscription plan selected.' };
+    }
+    return recordWhatsappOrder(pendingPlan, phone, email, method, name);
   };
+
+  const handleApprovePaymentRequest = useCallback(
+    async (userId: string, overridePlan?: string): Promise<{ ok: boolean; error?: string }> => {
+      const target = latestStateRef.current.users.find((u) => u.id === userId);
+      if (!target) return { ok: false, error: 'Payment request row not found.' };
+
+      const chosenPlan =
+        overridePlan ||
+        target.pendingPlan ||
+        target.plan ||
+        paymentPlans[0]?.name ||
+        'Monthly';
+      const matched = paymentPlans.find(
+        (p) => p.name.toLowerCase() === chosenPlan.toLowerCase()
+      );
+      const days = Math.max(1, Number(target.pendingDays || matched?.days || 1));
+      const amount = Number(target.pendingAmount || matched?.price || 0);
+      const expiry = Date.now() + days * 86400000;
+
+      const res = await updatePaymentRequestInSupabase(userId, {
+        status: 'approved',
+        plan: chosenPlan,
+        amount,
+        days,
+        expiry,
+      });
+      if (!res.ok) return { ok: false, error: res.error };
+      await refreshPaymentRequests();
+      return { ok: true };
+    },
+    [paymentPlans, refreshPaymentRequests]
+  );
+
+  const handleBlockPaymentRequest = useCallback(
+    async (userId: string): Promise<{ ok: boolean; error?: string }> => {
+      const res = await updatePaymentRequestInSupabase(userId, {
+        status: 'blocked',
+        expiry: 0,
+      });
+      if (!res.ok) return { ok: false, error: res.error };
+      await refreshPaymentRequests();
+      return { ok: true };
+    },
+    [refreshPaymentRequests]
+  );
+
+  const handleDeletePaymentRequest = useCallback(
+    async (userId: string): Promise<{ ok: boolean; error?: string }> => {
+      const res = await deletePaymentRequestInSupabase(userId);
+      if (!res.ok) return { ok: false, error: res.error };
+      await refreshPaymentRequests();
+      return { ok: true };
+    },
+    [refreshPaymentRequests]
+  );
+
+  const handleAddManualPaymentRequest = useCallback(
+    async (input: {
+      phone: string;
+      email: string;
+      plan: string;
+      amount: number;
+      days: number;
+    }): Promise<{ ok: boolean; error?: string }> => {
+      const days = Math.max(1, Number(input.days || 1));
+      const res = await insertPaymentRequestToSupabase({
+        phone: input.phone,
+        email: input.email,
+        plan: input.plan,
+        amount: Number(input.amount || 0),
+        days,
+        paymentMethod: 'Admin Manual Approval',
+        status: 'approved',
+        expiry: Date.now() + days * 86400000,
+      });
+      if (!res.ok) return { ok: false, error: res.error };
+      await refreshPaymentRequests();
+      return { ok: true };
+    },
+    [refreshPaymentRequests]
+  );
 
   const buildDownloadFileName = (title: string, videoUrl: string): string => {
     const base = (title || 'vj-emma-video').replace(/[^a-zA-Z0-9._-]/g, '_');
@@ -1117,6 +1267,14 @@ export default function App() {
               handleLogout();
             }}
             onNotify={showToast}
+            paymentRequestsError={paymentRequestsError}
+            onRefreshPaymentRequests={async () => {
+              await refreshPaymentRequests();
+            }}
+            onApprovePaymentRequest={handleApprovePaymentRequest}
+            onBlockPaymentRequest={handleBlockPaymentRequest}
+            onDeletePaymentRequest={handleDeletePaymentRequest}
+            onAddManualPaymentRequest={handleAddManualPaymentRequest}
             initialEditMovieId={adminEditMovieId}
             onClearInitialEditMovie={() => setAdminEditMovieId(null)}
             initialEditChannelId={adminEditChannelId}
@@ -1305,16 +1463,19 @@ export default function App() {
           setVipPopupOpen(false);
           setPendingPlan(plan);
         }}
-        onPayWithWhatsapp={(plan) => {
+        onPayWithWhatsapp={async (plan) => {
           setVipPopupOpen(false);
           if (state.currentUser?.phone && state.currentUser?.email) {
-            recordWhatsappOrder(
+            const res = await recordWhatsappOrder(
               plan,
               state.currentUser.phone,
               state.currentUser.email,
               'WhatsApp',
               state.currentUser.name
             );
+            if (!res.ok) {
+              setPendingPlan(plan);
+            }
           } else {
             setPendingPlan(plan);
           }

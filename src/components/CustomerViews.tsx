@@ -1,6 +1,6 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { ChevronLeft, ChevronRight, Download, Film, Heart, Info, Lock, MessageCircle, Play, Radio, RefreshCw, Share2 } from 'lucide-react';
-import { getSocialPlatformItems, isVipLabel, normalizeSocialUrl, parseGenreLine, parseMovieGenres, useResolvedMedia } from '../storage';
+import { getSocialPlatformItems, isVipLabel, normalizeSocialUrl, parseCategoryLine, parseGenreLine, parseMovieGenres, useResolvedMedia } from '../storage';
 import { PWAInstallButton } from './PWAInstallButton';
 import type {
   AppSettings,
@@ -274,7 +274,7 @@ const MovieCard: React.FC<MovieCardProps> = ({
     .filter(Boolean);
   const isVipMovie = isVipLabel(movie.label);
   const isVipLocked = isVipMovie && !isSubscribed && !isAdmin;
-  const movieGenres = parseMovieGenres(movie.genre, movie.category);
+  const movieGenres = parseMovieGenres(movie.genres, movie.genre, movie.categories, movie.category);
   const yearAndDuration = [showYear ? movie.year : '', movie.duration].filter(Boolean).join(' · ');
 
   const handlePosterTap = () => {
@@ -672,6 +672,7 @@ export const HomeView: React.FC<HomeViewProps> = ({
 }) => {
   const [pullDistance, setPullDistance] = useState(0);
   const [isRefreshing, setIsRefreshing] = useState(false);
+  const [selectedHomeTag, setSelectedHomeTag] = useState('ALL');
   const touchStartYRef = useRef<number | null>(null);
   const touchStartXRef = useRef<number | null>(null);
   const isPullingRef = useRef(false);
@@ -728,8 +729,40 @@ export const HomeView: React.FC<HomeViewProps> = ({
     }
   };
 
-  const trendingMovies = [...state.movies].reverse();
-  const homeSeasons = [...state.seasons].reverse();
+  const homeCategoryList = parseCategoryLine(state.settings.categoryLine);
+  const homeGenreList = parseGenreLine(state.settings.genreLine);
+  const homeFilterOptions = [
+    'ALL',
+    ...Array.from(
+      new Map([...homeCategoryList, ...homeGenreList].map((x) => [x.toLowerCase(), x])).values()
+    ),
+  ];
+
+  const matchesTagSelection = (
+    itemTagsSource: (string | string[] | undefined)[],
+    labelStr: string | undefined,
+    isSeasonItem = false
+  ): boolean => {
+    if (selectedHomeTag === 'ALL') return true;
+    const sel = selectedHomeTag.toLowerCase();
+    const tags = parseMovieGenres(...itemTagsSource).map((t) => t.toLowerCase());
+    if (tags.includes(sel)) return true;
+    if (sel === 'vip only' || sel === 'vip movies') return isVipLabel(labelStr);
+    if (sel === 'action movies' && tags.includes('action')) return true;
+    if (sel === 'comedy movies' && tags.includes('comedy')) return true;
+    if (sel === 'horror movies' && tags.includes('horror')) return true;
+    if (sel === 'series & seasons' && isSeasonItem) return true;
+    return false;
+  };
+
+  const trendingMovies = [...state.movies]
+    .reverse()
+    .filter((m) => matchesTagSelection([m.genres, m.genre, m.categories, m.category], m.label, false));
+
+  const homeSeasons = [...state.seasons]
+    .reverse()
+    .filter((s) => matchesTagSelection([s.genres, s.genre, s.categories, s.category], s.label, true));
+
   const christianMovies = state.movies
     .filter(
       (m) =>
@@ -777,17 +810,46 @@ export const HomeView: React.FC<HomeViewProps> = ({
       </div>
 
       <div className="px-4 py-5">
+        {/* GENRES & CATEGORIES FILTER BAR ON HOME */}
+        <div className="mb-4 flex flex-nowrap gap-2 overflow-x-auto pb-1">
+          {homeFilterOptions.map((tag) => (
+            <button
+              key={`home-tag-${tag}`}
+              type="button"
+              onClick={() => setSelectedHomeTag(tag)}
+              className={`min-h-[38px] shrink-0 whitespace-nowrap rounded-lg border px-3.5 py-1.5 text-xs font-semibold transition-colors ${
+                selectedHomeTag === tag
+                  ? 'border-[#d4af37] bg-[#d4af37] text-black'
+                  : 'border-[#6a0dad] bg-[#140e22] text-white hover:bg-[#6a0dad]/40'
+              }`}
+            >
+              {tag === 'ALL' ? 'All' : tag}
+            </button>
+          ))}
+        </div>
+
         <div className="mb-3 flex items-center justify-between border-b border-[#6a0dad]/50 pb-2">
           <h2 className="font-display text-lg font-semibold tracking-tight text-white">
-            Trending Now
+            {selectedHomeTag === 'ALL' ? 'Trending Now' : selectedHomeTag}
           </h2>
+          {selectedHomeTag !== 'ALL' && (
+            <button
+              type="button"
+              onClick={() => setSelectedHomeTag('ALL')}
+              className="text-xs font-bold text-[#f0cf65] hover:underline"
+            >
+              Show All
+            </button>
+          )}
         </div>
         <MoviesGrid
           movies={trendingMovies}
           emptyText={
             isCatalogLoading
               ? 'Loading movies & series from Cloud Database...'
-              : 'No movies available yet. Please check back soon.'
+              : selectedHomeTag === 'ALL'
+                ? 'No movies available yet. Please check back soon.'
+                : `No movies found in "${selectedHomeTag}".`
           }
           state={state}
           isSubscribed={isSubscribed}
@@ -814,7 +876,7 @@ export const HomeView: React.FC<HomeViewProps> = ({
                 const commentsCount = (state.comments[s.id] || []).length;
                 const isVipSeason = isVipLabel(s.label);
                 const isVipLocked = isVipSeason && !isSubscribed && !state.isAdminLoggedIn;
-                const seasonGenres = parseMovieGenres(s.genre);
+                const seasonGenres = parseMovieGenres(s.genres, s.genre, s.categories, s.category);
                 const yearAndDuration = [showYear ? s.year : '', s.duration].filter(Boolean).join(' · ');
 
                 const handleOpenSeason = () => {
@@ -998,22 +1060,31 @@ export const MoviesView: React.FC<MoviesViewProps> = ({
 }) => {
   const [selectedGenre, setSelectedGenre] = useState('ALL');
 
+  const parsedCategories = parseCategoryLine(state.settings.categoryLine);
   const parsedGenres = parseGenreLine(state.settings.genreLine);
-  const genreOptions = ['ALL', ...parsedGenres];
+  const genreOptions = [
+    'ALL',
+    ...Array.from(
+      new Map([...parsedCategories, ...parsedGenres].map((x) => [x.toLowerCase(), x])).values()
+    ),
+  ];
 
   const filteredMovies = [...state.movies].reverse().filter((m) => {
     if (selectedGenre === 'ALL') return true;
     const sel = selectedGenre.toLowerCase();
-    const movieGenres = parseMovieGenres(m.genre, m.category).map((g) => g.toLowerCase());
+    const movieTags = parseMovieGenres(m.genres, m.genre, m.categories, m.category).map((g) =>
+      g.toLowerCase()
+    );
 
-    if (movieGenres.includes(sel)) return true;
+    if (movieTags.includes(sel)) return true;
+    if (sel === 'vip only' || sel === 'vip movies') return isVipLabel(m.label);
+    if (sel === 'action movies' && movieTags.includes('action')) return true;
+    if (sel === 'comedy movies' && movieTags.includes('comedy')) return true;
+    if (sel === 'horror movies' && movieTags.includes('horror')) return true;
     if (
       sel === 'christian' &&
-      movieGenres.some((g) => g.includes('christian') || g.includes('faith') || g.includes('gospel'))
+      movieTags.some((g) => g.includes('christian') || g.includes('faith') || g.includes('gospel'))
     ) {
-      return true;
-    }
-    if (sel === 'vip movies' && isVipLabel(m.label)) {
       return true;
     }
     return false;
