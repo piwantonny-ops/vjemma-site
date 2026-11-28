@@ -50,10 +50,22 @@ class AppErrorBoundary extends React.Component<
 if (typeof window !== 'undefined') {
   if (import.meta.env.PROD) {
     try {
+      let hadController = Boolean(navigator.serviceWorker?.controller);
+      let swReloading = false;
+      navigator.serviceWorker?.addEventListener('controllerchange', () => {
+        if (!hadController) {
+          hadController = true;
+          return;
+        }
+        if (swReloading) return;
+        swReloading = true;
+        window.location.reload();
+      });
       registerSW({
         immediate: true,
         onRegisteredSW(_swUrl, reg) {
           setSwRegistration(reg);
+          reg?.update().catch(() => undefined);
         },
       });
     } catch {

@@ -858,7 +858,11 @@ export async function handleD1ApiRequest(request: Request, env: D1Env): Promise<
             (qEmail && r.email.toLowerCase() === qEmail)
         );
       }
-      rows.sort((a, b) => Date.parse(b.created_at) - Date.parse(a.created_at));
+      rows.sort((a, b) => {
+        const ta = Date.parse(a.created_at);
+        const tb = Date.parse(b.created_at);
+        return (Number.isFinite(tb) ? tb : 0) - (Number.isFinite(ta) ? ta : 0);
+      });
 
       return jsonResponse(request, {
         ok: true,
@@ -988,6 +992,10 @@ export async function handleD1ApiRequest(request: Request, env: D1Env): Promise<
       }
       if (body.method !== undefined && pMeta.columns.has('method')) {
         setClauses.push('method = ?');
+        setValues.push(String(body.method));
+      }
+      if (body.method !== undefined && pMeta.columns.has('payment_method')) {
+        setClauses.push('payment_method = ?');
         setValues.push(String(body.method));
       }
 

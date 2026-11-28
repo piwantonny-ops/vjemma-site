@@ -232,8 +232,17 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
   const [newClientPlan, setNewClientPlan] = useState<string>(
     state.settings.paymentPlans?.[0]?.name || 'Weekly'
   );
+  const [isAddingManualClient, setIsAddingManualClient] = useState(false);
+  const [busyClientId, setBusyClientId] = useState<string | null>(null);
+  const [isRefreshingClients, setIsRefreshingClients] = useState(false);
   const [walletAdjAmount, setWalletAdjAmount] = useState('');
   const [walletAdjNote, setWalletAdjNote] = useState('');
+
+  useEffect(() => {
+    if (!onRefreshPaymentRequests) return;
+    setIsRefreshingClients(true);
+    Promise.resolve(onRefreshPaymentRequests()).finally(() => setIsRefreshingClients(false));
+  }, [onRefreshPaymentRequests]);
 
   const mediaTotal =
     state.movies.length +
@@ -1277,6 +1286,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
   };
 
   const approveUser = async (userId: string, overridePlan?: string) => {
+    if (busyClientId) return;
     const target = state.users.find((u) => u.id === userId);
     if (!target) return;
 
@@ -1289,51 +1299,72 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
     const { days: fallbackDays } = getPlanPricing(chosenPlan);
     const days = Math.max(1, Number(target.pendingDays || fallbackDays || 1));
 
-    if (onApprovePaymentRequest) {
+    if (!onApprovePaymentRequest) {
+      onNotify('D1 payment_requests handler unavailable.');
+      return;
+    }
+
+    setBusyClientId(userId);
+    try {
       const res = await onApprovePaymentRequest(userId, chosenPlan);
       if (res.ok) {
         onNotify(`Approved ${target.phone} (${chosenPlan} · ${days} ${days === 1 ? 'Day' : 'Days'}).`);
       } else {
         onNotify(`D1 error: ${res.error || 'Could not approve client.'}`);
       }
-      return;
+    } finally {
+      setBusyClientId(null);
     }
-    onNotify('D1 payment_requests handler unavailable.');
   };
 
   const blockUser = async (userId: string) => {
+    if (busyClientId) return;
     const target = state.users.find((u) => u.id === userId);
     if (!target) return;
 
-    if (onBlockPaymentRequest) {
+    if (!onBlockPaymentRequest) {
+      onNotify('D1 payment_requests handler unavailable.');
+      return;
+    }
+
+    setBusyClientId(userId);
+    try {
       const res = await onBlockPaymentRequest(userId);
       if (res.ok) {
         onNotify(`Blocked ${target.phone}.`);
       } else {
         onNotify(`D1 error: ${res.error || 'Could not block client.'}`);
       }
-      return;
+    } finally {
+      setBusyClientId(null);
     }
-    onNotify('D1 payment_requests handler unavailable.');
   };
 
   const deleteUser = async (userId: string) => {
+    if (busyClientId) return;
     const target = state.users.find((u) => u.id === userId);
     if (!target) return;
 
-    if (onDeletePaymentRequest) {
+    if (!onDeletePaymentRequest) {
+      onNotify('D1 payment_requests handler unavailable.');
+      return;
+    }
+
+    setBusyClientId(userId);
+    try {
       const res = await onDeletePaymentRequest(userId);
       if (res.ok) {
         onNotify(`Deleted payment request ${target.phone}.`);
       } else {
         onNotify(`D1 error: ${res.error || 'Could not delete row.'}`);
       }
-      return;
+    } finally {
+      setBusyClientId(null);
     }
-    onNotify('D1 payment_requests handler unavailable.');
   };
 
   const addManualClient = async () => {
+    if (isAddingManualClient) return;
     const name = newClientName.trim();
     const phone = newClientPhone.trim();
     const email = newClientEmail.trim();
@@ -1344,7 +1375,13 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
     const { amount, days } = getPlanPricing(newClientPlan);
     const validDays = Math.max(1, Number(days || 1));
 
-    if (onAddManualPaymentRequest) {
+    if (!onAddManualPaymentRequest) {
+      onNotify('D1 payment_requests handler unavailable.');
+      return;
+    }
+
+    setIsAddingManualClient(true);
+    try {
       const res = await onAddManualPaymentRequest({
         name: name || undefined,
         phone,
@@ -1363,9 +1400,9 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
       } else {
         onNotify(`D1 error: ${res.error || 'Could not add manual payment.'}`);
       }
-      return;
+    } finally {
+      setIsAddingManualClient(false);
     }
-    onNotify('D1 payment_requests handler unavailable.');
   };
 
   const adjustWallet = (mode: 'add' | 'withdraw') => {
@@ -1787,10 +1824,11 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
             </div>
             <button
               type="button"
+              disabled={isAddingManualClient}
               onClick={addManualClient}
-              className="mt-3 min-h-[44px] rounded-lg bg-gradient-to-br from-[#d4af37] to-[#b58d1e] px-4 py-2 text-xs font-extrabold text-black"
+              className="mt-3 min-h-[44px] rounded-lg bg-gradient-to-br from-[#d4af37] to-[#b58d1e] px-4 py-2 text-xs font-extrabold text-black disabled:opacity-60"
             >
-              Add Manual Payment
+              {isAddingManualClient ? 'Saving to D1...' : 'Add Manual Payment'}
             </button>
           </div>
 
@@ -1808,10 +1846,16 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
                 {onRefreshPaymentRequests && (
                   <button
                     type="button"
-                    onClick={() => onRefreshPaymentRequests()}
-                    className="min-h-[38px] rounded-lg border border-[#d4af37] bg-[#6a0dad] px-3 py-1.5 text-xs font-bold text-[#f0cf65]"
+                    disabled={isRefreshingClients}
+                    onClick={() => {
+                      setIsRefreshingClients(true);
+                      Promise.resolve(onRefreshPaymentRequests()).finally(() =>
+                        setIsRefreshingClients(false)
+                      );
+                    }}
+                    className="min-h-[38px] rounded-lg border border-[#d4af37] bg-[#6a0dad] px-3 py-1.5 text-xs font-bold text-[#f0cf65] disabled:opacity-60"
                   >
-                    Refresh D1
+                    {isRefreshingClients ? 'Loading D1...' : 'Refresh D1'}
                   </button>
                 )}
                 <input
@@ -1825,8 +1869,22 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
             </div>
 
             {paymentRequestsError && (
-              <div className="mb-3 rounded-lg border border-rose-500/70 bg-rose-950/60 p-3 text-xs font-semibold text-rose-200">
-                D1 payment_requests error: {paymentRequestsError}
+              <div className="mb-3 flex flex-wrap items-center justify-between gap-2 rounded-lg border border-rose-500/70 bg-rose-950/60 p-3 text-xs font-semibold text-rose-200">
+                <span>D1 payment_requests error: {paymentRequestsError}</span>
+                {onRefreshPaymentRequests && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setIsRefreshingClients(true);
+                      Promise.resolve(onRefreshPaymentRequests()).finally(() =>
+                        setIsRefreshingClients(false)
+                      );
+                    }}
+                    className="rounded border border-rose-300/60 bg-rose-900/80 px-2.5 py-1 text-[11px] font-bold text-white"
+                  >
+                    Retry D1
+                  </button>
+                )}
               </div>
             )}
 
@@ -1919,32 +1977,36 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
                         <div className="flex flex-wrap gap-2">
                           <button
                             type="button"
+                            disabled={busyClientId === u.id}
                             onClick={() => approveUser(u.id)}
-                            className="min-h-[40px] rounded-md bg-emerald-600 px-3 py-1.5 text-xs font-extrabold text-white"
+                            className="min-h-[40px] rounded-md bg-emerald-600 px-3 py-1.5 text-xs font-extrabold text-white disabled:opacity-50"
                           >
-                            Approve
+                            {busyClientId === u.id ? 'Saving...' : 'Approve'}
                           </button>
                           {userStatus !== 'blocked' ? (
                             <button
                               type="button"
+                              disabled={busyClientId === u.id}
                               onClick={() => blockUser(u.id)}
-                              className="min-h-[40px] rounded-md border border-amber-400/70 bg-amber-700 px-3 py-1.5 text-xs font-bold text-white"
+                              className="min-h-[40px] rounded-md border border-amber-400/70 bg-amber-700 px-3 py-1.5 text-xs font-bold text-white disabled:opacity-50"
                             >
                               Block
                             </button>
                           ) : (
                             <button
                               type="button"
+                              disabled={busyClientId === u.id}
                               onClick={() => approveUser(u.id)}
-                              className="min-h-[40px] rounded-md border border-[#d4af37] bg-[#6a0dad] px-3 py-1.5 text-xs font-bold text-[#f0cf65]"
+                              className="min-h-[40px] rounded-md border border-[#d4af37] bg-[#6a0dad] px-3 py-1.5 text-xs font-bold text-[#f0cf65] disabled:opacity-50"
                             >
                               Unblock
                             </button>
                           )}
                           <button
                             type="button"
+                            disabled={busyClientId === u.id}
                             onClick={() => deleteUser(u.id)}
-                            className="min-h-[40px] rounded-md bg-[#b71c1c] px-3 py-1.5 text-xs font-bold text-white"
+                            className="min-h-[40px] rounded-md bg-[#b71c1c] px-3 py-1.5 text-xs font-bold text-white disabled:opacity-50"
                           >
                             Delete
                           </button>

@@ -420,83 +420,137 @@ function mapPaymentRequestRowToUser(row: PaymentRequestRecord): UserAccount {
   };
 }
 
+async function fetchD1PaymentApi<T>(
+  url: string,
+  init: RequestInit,
+  fallbackError: string
+): Promise<{ ok: boolean; status: number; data?: T; error?: string }> {
+  let lastNetworkErr: unknown = null;
+
+  for (let attempt = 0; attempt < 2; attempt++) {
+    try {
+      const res = await fetch(url, {
+        ...init,
+        cache: 'no-store',
+      });
+      const contentType = (res.headers.get('content-type') || '').toLowerCase();
+      const rawText = await res.text();
+
+      if (contentType.includes('text/html') || rawText.trimStart().startsWith('<')) {
+        return {
+          ok: false,
+          status: res.status,
+          error:
+            'Cloudflare D1 API (/api/payment-requests) returned HTML instead of JSON. Deploy with Cloudflare Functions/Worker and bind D1 "DB" -> "vjemmadb".',
+        };
+      }
+
+      let parsed: (T & { ok?: boolean; error?: string }) | null = null;
+      try {
+        parsed = rawText ? (JSON.parse(rawText) as T & { ok?: boolean; error?: string }) : null;
+      } catch {
+        parsed = null;
+      }
+
+      if (!res.ok || !parsed || parsed.ok === false) {
+        const msg =
+          parsed?.error ||
+          (res.status === 401
+            ? 'Admin session expired or missing. Please sign in to /admin again.'
+            : `${fallbackError} (HTTP ${res.status}).`);
+        return { ok: false, status: res.status, error: msg };
+      }
+
+      return { ok: true, status: res.status, data: parsed };
+    } catch (err) {
+      lastNetworkErr = err;
+      if (attempt === 0) {
+        await new Promise((r) => setTimeout(r, 250));
+      }
+    }
+  }
+
+  const rawMsg = lastNetworkErr instanceof Error ? lastNetworkErr.message : '';
+  const isNetworkFetchError =
+    /failed to fetch|networkerror|load failed/i.test(rawMsg) || !rawMsg;
+  return {
+    ok: false,
+    status: 0,
+    error: isNetworkFetchError
+      ? 'Could not reach Cloudflare D1 API (/api/payment-requests). Check your connection or reload to clear old browser cache.'
+      : rawMsg,
+  };
+}
+
 export async function fetchPaymentRequestsFromD1(lookup?: {
   phone?: string;
   email?: string;
+  forceAdmin?: boolean;
 }): Promise<{
   ok: boolean;
+  status?: number;
   users: UserAccount[];
   transactions: WalletTransaction[];
   wallet: number;
   error?: string;
 }> {
-  try {
-    const isAdmin = hasAdminBearerToken();
-    const cleanPhone = (lookup?.phone || '').trim();
-    const cleanEmail = (lookup?.email || '').trim();
-    if (!isAdmin && !cleanPhone && !cleanEmail) {
-      return { ok: true, users: [], transactions: [], wallet: 0 };
-    }
+  const isAdmin = Boolean(lookup?.forceAdmin || hasAdminBearerToken());
+  const cleanPhone = (lookup?.phone || '').trim();
+  const cleanEmail = (lookup?.email || '').trim();
+  if (!isAdmin && !cleanPhone && !cleanEmail) {
+    return { ok: true, users: [], transactions: [], wallet: 0 };
+  }
 
-    const params = new URLSearchParams({ t: String(Date.now()) });
-    if (!isAdmin) {
-      if (cleanPhone) params.set('phone', cleanPhone);
-      if (cleanEmail) params.set('email', cleanEmail);
-    }
+  const params = new URLSearchParams({ t: String(Date.now()) });
+  if (!isAdmin) {
+    if (cleanPhone) params.set('phone', cleanPhone);
+    if (cleanEmail) params.set('email', cleanEmail);
+  }
 
-    const res = await fetch(`/api/payment-requests?${params.toString()}`, {
+  const res = await fetchD1PaymentApi<{ rows?: PaymentRequestRecord[] }>(
+    `/api/payment-requests?${params.toString()}`,
+    {
       method: 'GET',
-      cache: 'no-store',
       headers: adminBearerToken ? { Authorization: `Bearer ${adminBearerToken}` } : {},
-    });
-    const data = (await res.json().catch(() => ({}))) as {
-      ok?: boolean;
-      rows?: PaymentRequestRecord[];
-      error?: string;
-    };
-    if (!res.ok || !data.ok) {
-      return {
-        ok: false,
-        users: [],
-        transactions: [],
-        wallet: 0,
-        error: data.error || `Failed to load payment_requests from D1 (HTTP ${res.status}).`,
-      };
-    }
+    },
+    'Failed to load payment_requests from D1'
+  );
 
-    const rows = Array.isArray(data.rows) ? data.rows : [];
-    const users = rows.map(mapPaymentRequestRowToUser);
-    let wallet = 0;
-    const transactions: WalletTransaction[] = rows.map((row) => {
-      const amount = Number(row.amount || 0);
-      const createdMs = row.created_at ? Date.parse(row.created_at) : NaN;
-      const isApproved = row.status === 'approved';
-      if (isApproved && Number.isFinite(amount) && amount > 0) {
-        wallet += amount;
-      }
-      return {
-        id: `tx_${row.id}`,
-        name: (row.client_name ?? row.name) ? String(row.client_name ?? row.name) : undefined,
-        phone: String(row.client_phone ?? row.phone ?? '').trim(),
-        email: String(row.email || '').trim(),
-        plan: String(row.plan || 'Subscription'),
-        amount,
-        method: String(row.method ?? row.payment_method ?? 'whatsapp'),
-        status: isApproved ? 'completed' : 'pending',
-        createdAt: Number.isFinite(createdMs) ? createdMs : Date.now(),
-      };
-    });
-
-    return { ok: true, users, transactions, wallet };
-  } catch (err) {
+  if (!res.ok || !res.data) {
     return {
       ok: false,
+      status: res.status,
       users: [],
       transactions: [],
       wallet: 0,
-      error: err instanceof Error ? err.message : 'Failed to load payment_requests from D1.',
+      error: res.error || 'Failed to load payment_requests from D1.',
     };
   }
+
+  const rows = Array.isArray(res.data.rows) ? res.data.rows : [];
+  const users = rows.map(mapPaymentRequestRowToUser);
+  let wallet = 0;
+  const transactions: WalletTransaction[] = rows.map((row) => {
+    const amount = Number(row.amount || 0);
+    const createdMs = row.created_at ? Date.parse(row.created_at) : NaN;
+    const isApproved = row.status === 'approved';
+    if (isApproved && Number.isFinite(amount) && amount > 0) {
+      wallet += amount;
+    }
+    return {
+      id: `tx_${row.id}`,
+      name: (row.client_name ?? row.name) ? String(row.client_name ?? row.name) : undefined,
+      phone: String(row.client_phone ?? row.phone ?? '').trim(),
+      email: String(row.email || '').trim(),
+      plan: String(row.plan || 'Subscription'),
+      amount,
+      method: String(row.method ?? row.payment_method ?? 'whatsapp'),
+      status: isApproved ? 'completed' : 'pending',
+      createdAt: Number.isFinite(createdMs) ? createdMs : Date.now(),
+    };
+  });
+
+  return { ok: true, status: res.status, users, transactions, wallet };
 }
 
 export async function insertPaymentRequestToD1(input: {
@@ -509,12 +563,12 @@ export async function insertPaymentRequestToD1(input: {
   method: string;
   status?: AccountStatus;
   expiry?: number;
-}): Promise<{ ok: boolean; user?: UserAccount; error?: string }> {
-  try {
-    const res = await fetch('/api/payment-requests', {
+}): Promise<{ ok: boolean; status?: number; user?: UserAccount; error?: string }> {
+  const res = await fetchD1PaymentApi<{ row?: PaymentRequestRecord }>(
+    '/api/payment-requests',
+    {
       method: 'POST',
       headers: authHeaders(),
-      cache: 'no-store',
       body: JSON.stringify({
         client_name: input.client_name?.trim() || null,
         client_phone: input.client_phone.trim(),
@@ -526,25 +580,18 @@ export async function insertPaymentRequestToD1(input: {
         status: input.status || 'pending',
         expiry: Number(input.expiry || 0),
       }),
-    });
-    const data = (await res.json().catch(() => ({}))) as {
-      ok?: boolean;
-      row?: PaymentRequestRecord;
-      error?: string;
-    };
-    if (!res.ok || !data.ok || !data.row) {
-      return {
-        ok: false,
-        error: data.error || `Could not save payment request to D1 (HTTP ${res.status}).`,
-      };
-    }
-    return { ok: true, user: mapPaymentRequestRowToUser(data.row) };
-  } catch (err) {
+    },
+    'Could not save payment request to D1'
+  );
+
+  if (!res.ok || !res.data?.row) {
     return {
       ok: false,
-      error: err instanceof Error ? err.message : 'Failed to insert into D1 payment_requests.',
+      status: res.status,
+      error: res.error || 'Failed to insert into D1 payment_requests.',
     };
   }
+  return { ok: true, status: res.status, user: mapPaymentRequestRowToUser(res.data.row) };
 }
 
 export async function updatePaymentRequestInD1(
@@ -557,55 +604,45 @@ export async function updatePaymentRequestInD1(
     days: number;
     method: string;
   }>
-): Promise<{ ok: boolean; user?: UserAccount; error?: string }> {
-  try {
-    const res = await fetch(`/api/payment-requests/${encodeURIComponent(id)}`, {
+): Promise<{ ok: boolean; status?: number; user?: UserAccount; error?: string }> {
+  const res = await fetchD1PaymentApi<{ row?: PaymentRequestRecord }>(
+    `/api/payment-requests/${encodeURIComponent(id)}`,
+    {
       method: 'PATCH',
       headers: authHeaders(),
-      cache: 'no-store',
       body: JSON.stringify(patch),
-    });
-    const data = (await res.json().catch(() => ({}))) as {
-      ok?: boolean;
-      row?: PaymentRequestRecord;
-      error?: string;
-    };
-    if (!res.ok || !data.ok || !data.row) {
-      return {
-        ok: false,
-        error: data.error || `Could not update payment_requests in D1 (HTTP ${res.status}).`,
-      };
-    }
-    return { ok: true, user: mapPaymentRequestRowToUser(data.row) };
-  } catch (err) {
+    },
+    'Could not update payment_requests in D1'
+  );
+
+  if (!res.ok || !res.data?.row) {
     return {
       ok: false,
-      error: err instanceof Error ? err.message : 'Failed to update D1 payment_requests.',
+      status: res.status,
+      error: res.error || 'Failed to update D1 payment_requests.',
     };
   }
+  return { ok: true, status: res.status, user: mapPaymentRequestRowToUser(res.data.row) };
 }
 
 export async function deletePaymentRequestInD1(
   id: string
-): Promise<{ ok: boolean; error?: string }> {
-  try {
-    const res = await fetch(`/api/payment-requests/${encodeURIComponent(id)}`, {
+): Promise<{ ok: boolean; status?: number; error?: string }> {
+  const res = await fetchD1PaymentApi<{ ok?: boolean }>(
+    `/api/payment-requests/${encodeURIComponent(id)}`,
+    {
       method: 'DELETE',
       headers: authHeaders(),
-      cache: 'no-store',
-    });
-    const data = (await res.json().catch(() => ({}))) as { ok?: boolean; error?: string };
-    if (!res.ok || !data.ok) {
-      return {
-        ok: false,
-        error: data.error || `Could not delete row from D1 (HTTP ${res.status}).`,
-      };
-    }
-    return { ok: true };
-  } catch (err) {
+    },
+    'Could not delete row from D1 payment_requests'
+  );
+
+  if (!res.ok) {
     return {
       ok: false,
-      error: err instanceof Error ? err.message : 'Failed to delete row from D1 payment_requests.',
+      status: res.status,
+      error: res.error || 'Failed to delete row from D1 payment_requests.',
     };
   }
+  return { ok: true, status: res.status };
 }

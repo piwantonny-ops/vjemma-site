@@ -91,18 +91,29 @@ export default function App() {
     return true;
   }, []);
 
-  const refreshPaymentRequests = useCallback(async (overrideLookup?: { phone?: string; email?: string }) => {
-    const curUser = latestStateRef.current.currentUser;
-    const lookup = overrideLookup || (
-      curUser && curUser.role !== 'admin'
-        ? { phone: curUser.phone, email: curUser.email }
-        : undefined
-    );
-    const res = await fetchPaymentRequestsFromD1(lookup);
-    if (!res.ok) {
-      setPaymentRequestsError(res.error || 'Could not load payment_requests from D1.');
-      return false;
-    }
+  const refreshPaymentRequests = useCallback(
+    async (overrideLookup?: { phone?: string; email?: string; forceAdmin?: boolean }) => {
+      const curUser = latestStateRef.current.currentUser;
+      const isAdminSession = Boolean(overrideLookup?.forceAdmin || latestStateRef.current.isAdminLoggedIn);
+      const lookup = isAdminSession
+        ? { forceAdmin: true }
+        : overrideLookup ||
+          (curUser && curUser.role !== 'admin'
+            ? { phone: curUser.phone, email: curUser.email }
+            : undefined);
+      const res = await fetchPaymentRequestsFromD1(lookup);
+      if (!res.ok) {
+        if (res.status === 401 && latestStateRef.current.isAdminLoggedIn) {
+          setAdminBearerToken(null);
+          setState((prev) => ({
+            ...prev,
+            isAdminLoggedIn: false,
+            currentUser: null,
+          }));
+        }
+        setPaymentRequestsError(res.error || 'Could not load payment_requests from D1.');
+        return false;
+      }
     setPaymentRequestsError(null);
     const now = Date.now();
     const activeClientsCount = res.users.filter(
@@ -405,28 +416,27 @@ export default function App() {
       return;
     }
 
-    setState((prev) => {
-      const next: AppState = {
-        ...prev,
-        adminEmail: LOCKED_ADMIN_EMAIL,
-        isAdminLoggedIn: true,
-        currentUser: {
-          phone: 'Admin',
-          email: res.email || LOCKED_ADMIN_EMAIL,
-          role: 'admin',
-          subscribed: true,
-          plan: 'Admin',
-          expiry: Date.now() + 365 * 86400000,
-        },
-      };
-      latestStateRef.current = next;
-      return next;
-    });
+    const adminUser = {
+      phone: 'Admin',
+      email: res.email || LOCKED_ADMIN_EMAIL,
+      role: 'admin' as const,
+      subscribed: true,
+      plan: 'Admin',
+      expiry: Date.now() + 365 * 86400000,
+    };
+    const nextAdminState: AppState = {
+      ...latestStateRef.current,
+      adminEmail: LOCKED_ADMIN_EMAIL,
+      isAdminLoggedIn: true,
+      currentUser: adminUser,
+    };
+    latestStateRef.current = nextAdminState;
+    setState(nextAdminState);
     setPendingPlansAfterAuth(false);
     setAuthModalOpen(false);
     setIsAdminRoute(true);
     setCurrentView('admin');
-    refreshPaymentRequests();
+    refreshPaymentRequests({ forceAdmin: true });
     showToast('Welcome Admin');
   };
 
