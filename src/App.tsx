@@ -8,14 +8,10 @@ import {
   CommentsModal,
   InfoModal,
   MovieDetailsModal,
-  PaymentSuccessPage,
-  PENDING_PESAPAL_ORDER_KEY,
-  PendingPesapalOrder,
-  PesapalModal,
   PlansModal,
   PlayerModal,
   VipPaymentPopupModal,
-  WorkerStatusResponse,
+  WhatsappCheckoutModal,
 } from './components/Modals';
 import { OfflineIndicator } from './components/PWAInstallButton';
 import {
@@ -31,24 +27,20 @@ import {
 } from './storage';
 import { clearOldCachesAndCheckUpdates } from './cacheSync';
 import {
-  deletePaymentRequestInSupabase,
-  fetchPaymentRequestsFromSupabase,
-  fetchSupabasePublicState,
-  insertPaymentRequestToSupabase,
-  subscribeToSupabasePublicChanges,
-  syncStateChangesToSupabase,
-  updatePaymentRequestInSupabase,
-} from './supabaseClient';
+  deletePaymentRequestInD1,
+  fetchD1PublicState,
+  fetchPaymentRequestsFromD1,
+  insertPaymentRequestToD1,
+  loginAdminToD1,
+  setAdminBearerToken,
+  syncStateChangesToD1,
+  updatePaymentRequestInD1,
+} from './d1Client';
 import type { AppState, AppView, InfoModalType, LiveTvChannel, PendingPlan, PlayerMedia, Season } from './types';
-
-const PROCESSED_PESAPAL_ORDERS_KEY = 'vj_emma_processed_pesapal_orders';
 
 export default function App() {
   const [state, setState] = useState<AppState>(() => loadState());
   const [currentView, setCurrentView] = useState<AppView>('home');
-  const [isPaymentSuccessRoute, setIsPaymentSuccessRoute] = useState<boolean>(() =>
-    typeof window !== 'undefined' && window.location.pathname.startsWith('/payment-success')
-  );
   const [isAdminRoute, setIsAdminRoute] = useState<boolean>(() =>
     typeof window !== 'undefined' && window.location.pathname.toLowerCase().startsWith('/admin')
   );
@@ -77,8 +69,8 @@ export default function App() {
     openMediaDB();
   }, []);
 
-  const refreshFromSupabase = useCallback(async (forceRemote = false) => {
-    const patch = await fetchSupabasePublicState(latestStateRef.current, { forceRemote });
+  const refreshFromD1 = useCallback(async () => {
+    const patch = await fetchD1PublicState(latestStateRef.current);
     if (!patch) return false;
     setState((prev) => {
       const next: AppState = {
@@ -99,10 +91,16 @@ export default function App() {
     return true;
   }, []);
 
-  const refreshPaymentRequests = useCallback(async () => {
-    const res = await fetchPaymentRequestsFromSupabase();
+  const refreshPaymentRequests = useCallback(async (overrideLookup?: { phone?: string; email?: string }) => {
+    const curUser = latestStateRef.current.currentUser;
+    const lookup = overrideLookup || (
+      curUser && curUser.role !== 'admin'
+        ? { phone: curUser.phone, email: curUser.email }
+        : undefined
+    );
+    const res = await fetchPaymentRequestsFromD1(lookup);
     if (!res.ok) {
-      setPaymentRequestsError(res.error || 'Could not load payment_requests from Supabase.');
+      setPaymentRequestsError(res.error || 'Could not load payment_requests from D1.');
       return false;
     }
     setPaymentRequestsError(null);
@@ -164,30 +162,25 @@ export default function App() {
 
   useEffect(() => {
     clearOldCachesAndCheckUpdates().finally(() => {
-      Promise.all([refreshFromSupabase(true), refreshPaymentRequests()]).finally(() =>
+      Promise.all([refreshFromD1(), refreshPaymentRequests()]).finally(() =>
         setIsCatalogLoading(false)
       );
-    });
-
-    const unsubRealtime = subscribeToSupabasePublicChanges(() => {
-      refreshFromSupabase(false);
-      refreshPaymentRequests();
     });
 
     const onVisibility = () => {
       if (document.visibilityState === 'visible') {
         clearOldCachesAndCheckUpdates();
-        refreshFromSupabase(false);
+        refreshFromD1();
         refreshPaymentRequests();
       }
     };
     const onFocusOrShow = () => {
       clearOldCachesAndCheckUpdates();
-      refreshFromSupabase(false);
+      refreshFromD1();
       refreshPaymentRequests();
     };
     const onOnline = () => {
-      refreshFromSupabase(true);
+      refreshFromD1();
       refreshPaymentRequests();
     };
 
@@ -197,30 +190,28 @@ export default function App() {
     window.addEventListener('online', onOnline);
 
     const pollId = window.setInterval(() => {
-      refreshFromSupabase(false);
+      refreshFromD1();
       refreshPaymentRequests();
-    }, 20000);
+    }, 15000);
 
     return () => {
-      unsubRealtime();
       document.removeEventListener('visibilitychange', onVisibility);
       window.removeEventListener('focus', onFocusOrShow);
       window.removeEventListener('pageshow', onFocusOrShow);
       window.removeEventListener('online', onOnline);
       window.clearInterval(pollId);
     };
-  }, [refreshFromSupabase, refreshPaymentRequests]);
+  }, [refreshFromD1, refreshPaymentRequests]);
 
   useEffect(() => {
     const syncFromStorage = () => {
       const fresh = loadState();
       setState((prev) => ({
         ...prev,
-        adminPassword: fresh.adminPassword,
         isAdminLoggedIn: prev.isAdminLoggedIn,
         currentUser: prev.isAdminLoggedIn ? prev.currentUser : fresh.currentUser,
       }));
-      refreshFromSupabase(false);
+      refreshFromD1();
       refreshPaymentRequests();
     };
 
@@ -241,11 +232,10 @@ export default function App() {
       window.removeEventListener('storage', onStorage);
       bc?.close();
     };
-  }, [refreshFromSupabase, refreshPaymentRequests]);
+  }, [refreshFromD1, refreshPaymentRequests]);
 
   useEffect(() => {
     const onPopState = () => {
-      setIsPaymentSuccessRoute(window.location.pathname.startsWith('/payment-success'));
       setIsAdminRoute(window.location.pathname.toLowerCase().startsWith('/admin'));
     };
     window.addEventListener('popstate', onPopState);
@@ -262,9 +252,9 @@ export default function App() {
 
   const handleManualRefresh = useCallback(async () => {
     await clearOldCachesAndCheckUpdates();
-    const [updated] = await Promise.all([refreshFromSupabase(true), refreshPaymentRequests()]);
+    const [updated] = await Promise.all([refreshFromD1(), refreshPaymentRequests()]);
     showToast(updated ? 'Updated with latest movies & series!' : 'Catalog is up to date.');
-  }, [refreshFromSupabase, refreshPaymentRequests, showToast]);
+  }, [refreshFromD1, refreshPaymentRequests, showToast]);
 
   useEffect(() => {
     if (!toastMessage) return;
@@ -279,9 +269,9 @@ export default function App() {
       latestStateRef.current = next;
       saveState(next);
       setState(next);
-      syncStateChangesToSupabase(prev, next).then((res) => {
+      syncStateChangesToD1(prev, next).then((res) => {
         if (!res.ok && next.isAdminLoggedIn) {
-          showToast(`Cloud Database sync warning: ${res.error || 'Could not sync'}`);
+          showToast(`D1 sync warning: ${res.error || 'Could not sync'}`);
         }
       });
     },
@@ -296,7 +286,6 @@ export default function App() {
         } catch {
           // Ignore pushState restrictions
         }
-        setIsPaymentSuccessRoute(false);
         setIsAdminRoute(true);
         if (state.isAdminLoggedIn) {
           setCurrentView('admin');
@@ -305,20 +294,19 @@ export default function App() {
         return;
       }
 
-      if (isPaymentSuccessRoute || isAdminRoute) {
+      if (isAdminRoute) {
         try {
           window.history.pushState({}, '', '/');
         } catch {
           // Ignore pushState restrictions
         }
-        setIsPaymentSuccessRoute(false);
         setIsAdminRoute(false);
       }
 
       setCurrentView(viewName);
       window.scrollTo({ top: 0, behavior: 'instant' as ScrollBehavior });
     },
-    [isAdminRoute, isPaymentSuccessRoute, state.isAdminLoggedIn]
+    [isAdminRoute, state.isAdminLoggedIn]
   );
 
   const paymentPlans =
@@ -404,40 +392,41 @@ export default function App() {
     setAuthModalOpen(true);
   };
 
-  const handleAdminLoginSubmit = (email: string, password: string) => {
+  const handleAdminLoginSubmit = async (email: string, password: string) => {
     const cleanEmail = email.trim().toLowerCase();
     if (!cleanEmail || !password) {
       showToast('Enter Admin Username / Email and Password.');
       return;
     }
-    const isAllowedAdminIdentifier =
-      cleanEmail === 'admin' || cleanEmail === LOCKED_ADMIN_EMAIL.toLowerCase();
-    if (!isAllowedAdminIdentifier) {
-      showToast('Access denied: Invalid Admin credentials.');
-      return;
-    }
-    if (password !== state.adminPassword) {
-      showToast('Incorrect Admin Password.');
+
+    const res = await loginAdminToD1(cleanEmail, password);
+    if (!res.ok) {
+      showToast(res.error || 'Invalid Admin credentials.');
       return;
     }
 
-    updateState((prev) => ({
-      ...prev,
-      adminEmail: LOCKED_ADMIN_EMAIL,
-      isAdminLoggedIn: true,
-      currentUser: {
-        phone: 'Admin',
-        email: cleanEmail === 'admin' ? LOCKED_ADMIN_EMAIL : cleanEmail,
-        role: 'admin',
-        subscribed: true,
-        plan: 'Admin',
-        expiry: Date.now() + 365 * 86400000,
-      },
-    }));
+    setState((prev) => {
+      const next: AppState = {
+        ...prev,
+        adminEmail: LOCKED_ADMIN_EMAIL,
+        isAdminLoggedIn: true,
+        currentUser: {
+          phone: 'Admin',
+          email: res.email || LOCKED_ADMIN_EMAIL,
+          role: 'admin',
+          subscribed: true,
+          plan: 'Admin',
+          expiry: Date.now() + 365 * 86400000,
+        },
+      };
+      latestStateRef.current = next;
+      return next;
+    });
     setPendingPlansAfterAuth(false);
     setAuthModalOpen(false);
     setIsAdminRoute(true);
     setCurrentView('admin');
+    refreshPaymentRequests();
     showToast('Welcome Admin');
   };
 
@@ -498,6 +487,7 @@ export default function App() {
     setPendingPlansAfterAuth(false);
     setPendingVipTitle(undefined);
     setAuthModalOpen(false);
+    refreshPaymentRequests({ phone: cleanPhone, email: cleanEmail });
     showToast('Signed in successfully.');
 
     if (openPlansNow && !signedInRecordSubscribed) {
@@ -514,6 +504,7 @@ export default function App() {
   };
 
   const handleLogout = () => {
+    setAdminBearerToken(null);
     updateState((prev) => ({
       ...prev,
       currentUser: null,
@@ -528,212 +519,26 @@ export default function App() {
     setCurrentView('home');
   };
 
-  const handleWorkerPaymentCompleted = useCallback(
-    (orderId: string, workerData: WorkerStatusResponse, savedOrder: PendingPesapalOrder | null) => {
-      const cleanName = String(
-        workerData.name || savedOrder?.name || state.currentUser?.name || ''
-      ).trim();
-      const cleanPhone = String(
-        workerData.phone || savedOrder?.phone || state.currentUser?.phone || ''
-      ).trim();
-      const cleanEmail = String(
-        workerData.email || savedOrder?.email || state.currentUser?.email || ''
-      ).trim();
-
-      const fallbackPlan = paymentPlans[0] || { id: 'plan_1', name: 'Subscription', price: 5000, days: 1 };
-      const planName = String(
-        workerData.planName || savedOrder?.planName || fallbackPlan.name
-      ).trim();
-
-      const matchedPlan = paymentPlans.find(
-        (p) => p.name.toLowerCase() === planName.toLowerCase()
-      );
-      const amount = Number(
-        workerData.amount || savedOrder?.amount || matchedPlan?.price || fallbackPlan.price
-      );
-      const days = Math.max(
-        1,
-        Number(workerData.days || savedOrder?.days || matchedPlan?.days || fallbackPlan.days || 1)
-      );
-      const method = savedOrder?.method ? `Pesapal (${savedOrder.method})` : 'Pesapal';
-      const now = Date.now();
-      const calculatedExpiry = now + days * 86400000;
-
-      let processedIds: string[] = [];
-      try {
-        processedIds = JSON.parse(localStorage.getItem(PROCESSED_PESAPAL_ORDERS_KEY) || '[]');
-        if (!Array.isArray(processedIds)) processedIds = [];
-      } catch {
-        processedIds = [];
-      }
-
-      const txId = `tx_pesapal_${orderId}`;
-      const alreadyProcessed =
-        processedIds.includes(orderId) ||
-        Boolean((state.walletTransactions || []).some((tx) => tx.id === txId));
-
-      if (!alreadyProcessed) {
-        updateState((prev) => {
-          const existingIdx = prev.users.findIndex(
-            (u) =>
-              (cleanPhone && u.phone === cleanPhone) ||
-              (cleanEmail && u.email.toLowerCase() === cleanEmail.toLowerCase())
-          );
-
-          if (existingIdx !== -1 && prev.users[existingIdx].status === 'blocked') {
-            return prev;
-          }
-
-          const nextUsers = [...prev.users];
-          let userId = 'usr_' + now;
-
-          if (existingIdx === -1) {
-            nextUsers.unshift({
-              id: userId,
-              name: cleanName || undefined,
-              phone: cleanPhone || cleanEmail || 'Customer',
-              email: cleanEmail || `${cleanPhone}@vjemma.site`,
-              password: '',
-              subscribed: true,
-              plan: planName,
-              pendingPlan: null,
-              pendingAmount: 0,
-              pendingDays: 0,
-              paymentMethod: method,
-              status: 'approved',
-              expiry: calculatedExpiry,
-              createdAt: now,
-            });
-          } else {
-            userId = nextUsers[existingIdx].id;
-            nextUsers[existingIdx] = {
-              ...nextUsers[existingIdx],
-              name: cleanName || nextUsers[existingIdx].name,
-              phone: cleanPhone || nextUsers[existingIdx].phone,
-              email: cleanEmail || nextUsers[existingIdx].email,
-              subscribed: true,
-              plan: planName,
-              pendingPlan: null,
-              pendingAmount: 0,
-              pendingDays: 0,
-              paymentMethod: method,
-              status: 'approved',
-              expiry: calculatedExpiry,
-            };
-          }
-
-          const subscribedCount = nextUsers.filter(
-            (u) => u.subscribed && u.status !== 'blocked' && u.expiry > now
-          ).length;
-
-          const nextTx = {
-            id: txId,
-            name: cleanName || undefined,
-            phone: cleanPhone || cleanEmail || 'Customer',
-            email: cleanEmail,
-            plan: planName,
-            amount,
-            method,
-            status: 'completed' as const,
-            createdAt: now,
-          };
-
-          const shouldUpdateCurrent = !prev.currentUser || prev.currentUser.role !== 'admin';
-
-          return {
-            ...prev,
-            users: nextUsers,
-            clients: Math.max(prev.clients, subscribedCount),
-            wallet: prev.wallet + amount,
-            walletTransactions: [nextTx, ...(prev.walletTransactions || [])],
-            currentUser: shouldUpdateCurrent
-              ? {
-                  id: userId,
-                  name: cleanName || prev.currentUser?.name,
-                  phone: cleanPhone || prev.currentUser?.phone || '',
-                  email: cleanEmail || prev.currentUser?.email || '',
-                  role: 'customer',
-                  subscribed: true,
-                  plan: planName,
-                  status: 'approved',
-                  expiry: calculatedExpiry,
-                }
-              : prev.currentUser,
-          };
-        });
-
-        insertPaymentRequestToSupabase({
-          name: cleanName || undefined,
-          phone: cleanPhone || cleanEmail || 'Customer',
-          email: cleanEmail || `${cleanPhone}@vjemma.site`,
-          plan: planName,
-          amount,
-          days,
-          paymentMethod: method,
-          status: 'approved',
-          expiry: calculatedExpiry,
-        }).then((res) => {
-          if (res.ok) refreshPaymentRequests();
-        });
-
-        try {
-          localStorage.setItem(
-            PROCESSED_PESAPAL_ORDERS_KEY,
-            JSON.stringify([...processedIds.slice(-49), orderId])
-          );
-          localStorage.removeItem(PENDING_PESAPAL_ORDER_KEY);
-        } catch {
-          // Ignore storage issues
-        }
-      }
-
-      return {
-        expiry: calculatedExpiry,
-        planName,
-        amount,
-        name: cleanName || cleanPhone,
-        phone: cleanPhone,
-        email: cleanEmail,
-      };
-    },
-    [paymentPlans, refreshPaymentRequests, state.currentUser, state.walletTransactions, updateState]
-  );
-
-  const handleReturnFromPaymentSuccess = useCallback(
-    (openPlans?: boolean) => {
-      try {
-        window.history.pushState({}, '', '/');
-      } catch {
-        // Ignore pushState restrictions
-      }
-      setIsPaymentSuccessRoute(false);
-      setCurrentView('home');
-      if (openPlans) {
-        setPlansModalOpen(true);
-      }
-    },
-    []
-  );
-
   const recordWhatsappOrder = async (
     planObj: PendingPlan,
     phone: string,
     email: string,
-    method: string,
+    _method: string,
     name?: string
   ): Promise<{ ok: boolean; error?: string }> => {
     const cleanPhone = phone.trim();
     const cleanEmail = email.trim();
-    const cleanName = name?.trim() || undefined;
-    if (!cleanPhone || !cleanEmail) {
-      const msg = 'Enter your phone number and email first.';
+    const cleanName = name?.trim() || (cleanEmail ? cleanEmail.split('@')[0] : cleanPhone);
+    if (!cleanPhone) {
+      const msg = 'Enter your phone number first.';
       showToast(msg);
       return { ok: false, error: msg };
     }
 
     const existingBlocked = state.users.find(
       (u) =>
-        (u.phone === cleanPhone || u.email.toLowerCase() === cleanEmail.toLowerCase()) &&
+        (u.phone === cleanPhone ||
+          (cleanEmail && u.email.toLowerCase() === cleanEmail.toLowerCase())) &&
         u.status === 'blocked'
     );
     if (existingBlocked) {
@@ -742,20 +547,20 @@ export default function App() {
       return { ok: false, error: msg };
     }
 
-    const insertRes = await insertPaymentRequestToSupabase({
-      name: cleanName,
-      phone: cleanPhone,
+    const insertRes = await insertPaymentRequestToD1({
+      client_name: cleanName,
+      client_phone: cleanPhone,
       email: cleanEmail,
       plan: planObj.planName,
       amount: Number(planObj.amount),
       days: Math.max(1, Number(planObj.days || 1)),
-      paymentMethod: `Manual WhatsApp (${method})`,
+      method: 'whatsapp',
       status: 'pending',
       expiry: 0,
     });
 
     if (!insertRes.ok || !insertRes.user) {
-      const errMsg = insertRes.error || 'Could not save payment request to Supabase.';
+      const errMsg = insertRes.error || 'Could not save payment request to Cloudflare D1.';
       setPaymentRequestsError(errMsg);
       showToast(`Payment submit failed: ${errMsg}`);
       return { ok: false, error: errMsg };
@@ -772,7 +577,7 @@ export default function App() {
         email: savedRow.email,
         plan: savedRow.pendingPlan || planObj.planName,
         amount: Number(savedRow.pendingAmount || planObj.amount),
-        method: savedRow.paymentMethod || `Manual WhatsApp (${method})`,
+        method: savedRow.paymentMethod || 'whatsapp',
         status: 'pending' as const,
         createdAt: savedRow.createdAt || Date.now(),
       };
@@ -813,7 +618,7 @@ export default function App() {
     });
 
     refreshPaymentRequests();
-    showToast('WhatsApp payment request submitted! Pending Admin approval.');
+    showToast('Saved to D1! Opening WhatsApp for Admin approval.');
     return { ok: true };
   };
 
@@ -847,7 +652,7 @@ export default function App() {
       const amount = Number(target.pendingAmount || matched?.price || 0);
       const expiry = Date.now() + days * 86400000;
 
-      const res = await updatePaymentRequestInSupabase(userId, {
+      const res = await updatePaymentRequestInD1(userId, {
         status: 'approved',
         plan: chosenPlan,
         amount,
@@ -863,7 +668,7 @@ export default function App() {
 
   const handleBlockPaymentRequest = useCallback(
     async (userId: string): Promise<{ ok: boolean; error?: string }> => {
-      const res = await updatePaymentRequestInSupabase(userId, {
+      const res = await updatePaymentRequestInD1(userId, {
         status: 'blocked',
         expiry: 0,
       });
@@ -876,7 +681,7 @@ export default function App() {
 
   const handleDeletePaymentRequest = useCallback(
     async (userId: string): Promise<{ ok: boolean; error?: string }> => {
-      const res = await deletePaymentRequestInSupabase(userId);
+      const res = await deletePaymentRequestInD1(userId);
       if (!res.ok) return { ok: false, error: res.error };
       await refreshPaymentRequests();
       return { ok: true };
@@ -886,6 +691,7 @@ export default function App() {
 
   const handleAddManualPaymentRequest = useCallback(
     async (input: {
+      name?: string;
       phone: string;
       email: string;
       plan: string;
@@ -893,13 +699,14 @@ export default function App() {
       days: number;
     }): Promise<{ ok: boolean; error?: string }> => {
       const days = Math.max(1, Number(input.days || 1));
-      const res = await insertPaymentRequestToSupabase({
-        phone: input.phone,
+      const res = await insertPaymentRequestToD1({
+        client_name: input.name,
+        client_phone: input.phone,
         email: input.email,
         plan: input.plan,
         amount: Number(input.amount || 0),
         days,
-        paymentMethod: 'Admin Manual Approval',
+        method: 'manual',
         status: 'approved',
         expiry: Date.now() + days * 86400000,
       });
@@ -1214,7 +1021,7 @@ export default function App() {
             onClick={() => switchView('search')}
             aria-label="Search movies and series"
             className={`flex min-h-[38px] sm:min-h-[40px] items-center gap-1 whitespace-nowrap rounded-full border px-2.5 sm:px-3.5 py-1.5 text-[11px] sm:text-xs font-semibold transition-colors active:scale-95 ${
-              currentView === 'search' && !isPaymentSuccessRoute && !isAdminRoute
+              currentView === 'search' && !isAdminRoute
                 ? 'border-[#d4af37] bg-[#d4af37] text-black'
                 : 'border-[#6a0dad] bg-[#140d22] text-white hover:border-[#d4af37]'
             }`}
@@ -1242,12 +1049,7 @@ export default function App() {
 
       {/* MAIN CONTAINER */}
       <main className="mx-auto min-h-screen w-full max-w-[1200px] pb-[84px] pt-16">
-        {isPaymentSuccessRoute ? (
-          <PaymentSuccessPage
-            onPaymentCompleted={handleWorkerPaymentCompleted}
-            onReturnHome={handleReturnFromPaymentSuccess}
-          />
-        ) : isAdminRoute && !state.isAdminLoggedIn ? (
+        {isAdminRoute && !state.isAdminLoggedIn ? (
           <AdminLoginPage
             onSubmit={handleAdminLoginSubmit}
             onReturnSite={() => switchView('home')}
@@ -1413,7 +1215,7 @@ export default function App() {
             ['profile', 'Profile', User],
           ] as [AppView, string, typeof Home][]
         ).map(([viewKey, label, Icon]) => {
-          const active = !isPaymentSuccessRoute && !isAdminRoute && currentView === viewKey;
+          const active = !isAdminRoute && currentView === viewKey;
           return (
             <button
               key={viewKey}
@@ -1459,26 +1261,23 @@ export default function App() {
         plans={paymentPlans}
         currentUser={state.currentUser}
         onClose={() => setVipPopupOpen(false)}
-        onPayWithPesapal={(plan) => {
-          setVipPopupOpen(false);
-          setPendingPlan(plan);
-        }}
         onPayWithWhatsapp={async (plan) => {
-          setVipPopupOpen(false);
-          if (state.currentUser?.phone && state.currentUser?.email) {
+          if (state.currentUser?.phone) {
             const res = await recordWhatsappOrder(
               plan,
               state.currentUser.phone,
-              state.currentUser.email,
-              'WhatsApp',
-              state.currentUser.name
+              state.currentUser.email || '',
+              'whatsapp',
+              state.currentUser.name || state.currentUser.email?.split('@')[0] || state.currentUser.phone
             );
-            if (!res.ok) {
-              setPendingPlan(plan);
+            if (res.ok) {
+              setVipPopupOpen(false);
             }
-          } else {
-            setPendingPlan(plan);
+            return res;
           }
+          setVipPopupOpen(false);
+          setPendingPlan(plan);
+          return { ok: false, needsForm: true };
         }}
       />
 
@@ -1515,7 +1314,7 @@ export default function App() {
         onOpenComments={(id) => setCommentsMovieId(id)}
       />
 
-      <PesapalModal
+      <WhatsappCheckoutModal
         open={Boolean(pendingPlan)}
         onClose={() => setPendingPlan(null)}
         plan={pendingPlan}

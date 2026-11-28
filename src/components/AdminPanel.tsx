@@ -1,5 +1,6 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { Film } from 'lucide-react';
+import { updateAdminPasswordInD1 } from '../d1Client';
 import { uploadFileToR2 } from '../r2Upload';
 import {
   DEFAULT_CATEGORY_LINE,
@@ -30,6 +31,7 @@ interface AdminPanelProps {
   onBlockPaymentRequest?: (userId: string) => Promise<{ ok: boolean; error?: string }>;
   onDeletePaymentRequest?: (userId: string) => Promise<{ ok: boolean; error?: string }>;
   onAddManualPaymentRequest?: (input: {
+    name?: string;
     phone: string;
     email: string;
     plan: string;
@@ -170,9 +172,6 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
     const arr = Array.isArray(state.settings.r2Links) ? state.settings.r2Links : [];
     return [0, 1, 2, 3, 4].map((i) => arr[i] ?? (i === 0 ? state.settings.r2Endpoint || '' : ''));
   });
-  const [setPesapalKey, setSetPesapalKey] = useState(state.settings.pesapalKey);
-  const [setPesapalSecret, setSetPesapalSecret] = useState(state.settings.pesapalSecret || '');
-  const [setPesapalIpnUrl, setSetPesapalIpnUrl] = useState(state.settings.pesapalIpnUrl || '');
   const [setWhatsappKey, setSetWhatsappKey] = useState(state.settings.whatsappKey);
   const [setSocialLinks, setSetSocialLinks] = useState(state.settings.socialLinks);
   const [setWhatsappUrl, setSetWhatsappUrl] = useState(state.settings.whatsappUrl || '');
@@ -207,9 +206,6 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
     );
     const arr = Array.isArray(state.settings.r2Links) ? state.settings.r2Links : [];
     setSetR2Links([0, 1, 2, 3, 4].map((i) => arr[i] ?? (i === 0 ? state.settings.r2Endpoint || '' : '')));
-    setSetPesapalKey(state.settings.pesapalKey);
-    setSetPesapalSecret(state.settings.pesapalSecret || '');
-    setSetPesapalIpnUrl(state.settings.pesapalIpnUrl || '');
     setSetWhatsappKey(state.settings.whatsappKey);
     setSetSocialLinks(state.settings.socialLinks);
     setSetWhatsappUrl(state.settings.whatsappUrl || '');
@@ -230,6 +226,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
   /* --- CLIENTS / USERS & WALLET STATE --- */
   const [clientFilter, setClientFilter] = useState<'all' | 'pending' | 'approved' | 'blocked'>('all');
   const [clientSearch, setClientSearch] = useState('');
+  const [newClientName, setNewClientName] = useState('');
   const [newClientPhone, setNewClientPhone] = useState('');
   const [newClientEmail, setNewClientEmail] = useState('');
   const [newClientPlan, setNewClientPlan] = useState<string>(
@@ -410,9 +407,9 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
       setMovieUploadReady(true);
 
       if (movieTitle.trim()) {
-        setUploadStatus('R2 Upload Complete! Saving to Cloud Database...');
-        await commitMovieToStateAndSupabase(nextPosterUrl, nextVideoUrl);
-        onNotify('Uploaded to R2 & saved to Cloud Database automatically!');
+        setUploadStatus('R2 Upload Complete! Saving to Cloudflare D1...');
+        await commitMovieToStateAndD1(nextPosterUrl, nextVideoUrl);
+        onNotify('Uploaded to R2 & saved to Cloudflare D1 automatically!');
       } else {
         setUploadStatus('R2 Upload Complete! Enter Title & tap SAVE MOVIE.');
         onNotify('R2 Upload Complete! Public URL saved automatically — enter Title & click SAVE MOVIE.');
@@ -455,7 +452,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
     if (settingsVideoFileRef.current) settingsVideoFileRef.current.value = '';
   };
 
-  const commitMovieToStateAndSupabase = async (posterUrl: string, videoUrl: string) => {
+  const commitMovieToStateAndD1 = async (posterUrl: string, videoUrl: string) => {
     const title = movieTitle.trim();
     const cleanGenresList = parseMovieGenres(movieGenre);
     const cleanGenre = cleanGenresList.join(', ');
@@ -588,8 +585,8 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
       setUploadInProgress(false);
     }
 
-    await commitMovieToStateAndSupabase(nextPosterRef, nextVideoRef);
-    onNotify('Movie & poster saved to Cloud Database live!');
+    await commitMovieToStateAndD1(nextPosterRef, nextVideoRef);
+    onNotify('Movie & poster saved to Cloudflare D1 live!');
   };
 
   const startEditMovie = async (id: string, stayOnCurrentTab = false) => {
@@ -1147,19 +1144,6 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
     onNotify('All 5 R2 links saved!');
   };
 
-  const savePesapalSettings = () => {
-    updateState((prev) => ({
-      ...prev,
-      settings: {
-        ...prev.settings,
-        pesapalKey: setPesapalKey.trim(),
-        pesapalSecret: setPesapalSecret.trim(),
-        pesapalIpnUrl: setPesapalIpnUrl.trim(),
-      },
-    }));
-    onNotify('Pesapal settings saved!');
-  };
-
   const saveSocialPlatforms = () => {
     updateState((prev) => ({
       ...prev,
@@ -1230,9 +1214,6 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
         categoryLine: cleanCategoryLine,
         r2Endpoint: cleanLinks[0] || '',
         r2Links: cleanLinks,
-        pesapalKey: setPesapalKey.trim(),
-        pesapalSecret: setPesapalSecret.trim(),
-        pesapalIpnUrl: setPesapalIpnUrl.trim(),
         whatsappKey: setWhatsappKey.trim(),
         socialLinks: setSocialLinks.trim(),
         whatsappUrl: setWhatsappUrl.trim(),
@@ -1253,13 +1234,13 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
     onNotify('Settings saved & live instantly.');
   };
 
-  const handleSaveAdminCredentials = () => {
+  const handleSaveAdminCredentials = async () => {
     if (!state.isAdminLoggedIn) {
       onNotify('Only Admin can change the Admin password.');
       return;
     }
-    if (!cpNew || cpNew.length < 4) {
-      onNotify('New password must be at least 4 characters.');
+    if (!cpNew || cpNew.length < 6) {
+      onNotify('New password must be at least 6 characters.');
       return;
     }
     if (cpNew !== cpConfirm) {
@@ -1267,15 +1248,15 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
       return;
     }
 
-    updateState((prev) => ({
-      ...prev,
-      adminEmail: LOCKED_ADMIN_EMAIL,
-      adminPassword: cpNew,
-    }));
+    const res = await updateAdminPasswordInD1(cpNew);
+    if (!res.ok) {
+      onNotify(res.error || 'Could not update Admin password in D1.');
+      return;
+    }
 
     setCpNew('');
     setCpConfirm('');
-    onNotify('Admin password updated!');
+    onNotify('Admin password updated securely in Cloudflare D1!');
   };
 
   /* --- CLIENTS / USERS & WALLET HANDLERS --- */
@@ -1313,11 +1294,11 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
       if (res.ok) {
         onNotify(`Approved ${target.phone} (${chosenPlan} · ${days} ${days === 1 ? 'Day' : 'Days'}).`);
       } else {
-        onNotify(`Supabase error: ${res.error || 'Could not approve client.'}`);
+        onNotify(`D1 error: ${res.error || 'Could not approve client.'}`);
       }
       return;
     }
-    onNotify('Supabase payment_requests handler unavailable.');
+    onNotify('D1 payment_requests handler unavailable.');
   };
 
   const blockUser = async (userId: string) => {
@@ -1329,11 +1310,11 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
       if (res.ok) {
         onNotify(`Blocked ${target.phone}.`);
       } else {
-        onNotify(`Supabase error: ${res.error || 'Could not block client.'}`);
+        onNotify(`D1 error: ${res.error || 'Could not block client.'}`);
       }
       return;
     }
-    onNotify('Supabase payment_requests handler unavailable.');
+    onNotify('D1 payment_requests handler unavailable.');
   };
 
   const deleteUser = async (userId: string) => {
@@ -1345,18 +1326,19 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
       if (res.ok) {
         onNotify(`Deleted payment request ${target.phone}.`);
       } else {
-        onNotify(`Supabase error: ${res.error || 'Could not delete row.'}`);
+        onNotify(`D1 error: ${res.error || 'Could not delete row.'}`);
       }
       return;
     }
-    onNotify('Supabase payment_requests handler unavailable.');
+    onNotify('D1 payment_requests handler unavailable.');
   };
 
   const addManualClient = async () => {
+    const name = newClientName.trim();
     const phone = newClientPhone.trim();
     const email = newClientEmail.trim();
-    if (!phone || !email) {
-      onNotify('Enter client Phone and Email.');
+    if (!phone) {
+      onNotify('Enter Client Phone number.');
       return;
     }
     const { amount, days } = getPlanPricing(newClientPlan);
@@ -1364,6 +1346,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
 
     if (onAddManualPaymentRequest) {
       const res = await onAddManualPaymentRequest({
+        name: name || undefined,
         phone,
         email,
         plan: newClientPlan,
@@ -1371,17 +1354,18 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
         days: validDays,
       });
       if (res.ok) {
+        setNewClientName('');
         setNewClientPhone('');
         setNewClientEmail('');
         onNotify(
-          `Client ${phone} saved to Supabase payment_requests (${newClientPlan} · ${validDays} ${validDays === 1 ? 'Day' : 'Days'}).`
+          `Manual payment for ${name || phone} saved to D1 payment_requests (${newClientPlan} · ${validDays} ${validDays === 1 ? 'Day' : 'Days'}).`
         );
       } else {
-        onNotify(`Supabase error: ${res.error || 'Could not add client.'}`);
+        onNotify(`D1 error: ${res.error || 'Could not add manual payment.'}`);
       }
       return;
     }
-    onNotify('Supabase payment_requests handler unavailable.');
+    onNotify('D1 payment_requests handler unavailable.');
   };
 
   const adjustWallet = (mode: 'add' | 'withdraw') => {
@@ -1428,9 +1412,6 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
       );
       const arr = Array.isArray(state.settings.r2Links) ? state.settings.r2Links : [];
       setSetR2Links([0, 1, 2, 3, 4].map((i) => arr[i] ?? (i === 0 ? state.settings.r2Endpoint || '' : '')));
-      setSetPesapalKey(state.settings.pesapalKey);
-      setSetPesapalSecret(state.settings.pesapalSecret || '');
-      setSetPesapalIpnUrl(state.settings.pesapalIpnUrl || '');
       setSetWhatsappKey(state.settings.whatsappKey);
       setSetSocialLinks(state.settings.socialLinks);
       setSetWhatsappUrl(state.settings.whatsappUrl || '');
@@ -1755,9 +1736,19 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
         <div className="space-y-4">
           <div className="rounded-xl border border-[#d4af37]/30 bg-[#111018] p-4">
             <h3 className="mb-3 font-display text-base font-extrabold text-[#d4af37]">
-              Add & Approve Client Manually
+              Add Manual Payment
             </h3>
-            <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
+            <div className="grid grid-cols-1 gap-3 sm:grid-cols-4">
+              <div>
+                <label className={labelCls}>Client Name</label>
+                <input
+                  type="text"
+                  value={newClientName}
+                  onChange={(e) => setNewClientName(e.target.value)}
+                  placeholder="Full Name"
+                  className={inputCls}
+                />
+              </div>
               <div>
                 <label className={labelCls}>Client Phone</label>
                 <input
@@ -1769,7 +1760,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
                 />
               </div>
               <div>
-                <label className={labelCls}>Client Email</label>
+                <label className={labelCls}>Client Email (Optional)</label>
                 <input
                   type="email"
                   value={newClientEmail}
@@ -1799,7 +1790,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
               onClick={addManualClient}
               className="mt-3 min-h-[44px] rounded-lg bg-gradient-to-br from-[#d4af37] to-[#b58d1e] px-4 py-2 text-xs font-extrabold text-black"
             >
-              Add & Approve Client
+              Add Manual Payment
             </button>
           </div>
 
@@ -1810,7 +1801,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
                   Clients / Payment Requests ({state.users.length})
                 </h3>
                 <p className="text-[11px] text-[#b0aab8]">
-                  Loaded live from Supabase <span className="font-bold text-white">payment_requests</span> (newest first)
+                  Loaded live from Cloudflare D1 (<span className="font-bold text-white">vjemmadb · payment_requests</span>, newest first)
                 </p>
               </div>
               <div className="flex flex-wrap items-center gap-2">
@@ -1820,7 +1811,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
                     onClick={() => onRefreshPaymentRequests()}
                     className="min-h-[38px] rounded-lg border border-[#d4af37] bg-[#6a0dad] px-3 py-1.5 text-xs font-bold text-[#f0cf65]"
                   >
-                    Refresh Supabase
+                    Refresh D1
                   </button>
                 )}
                 <input
@@ -1835,7 +1826,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
 
             {paymentRequestsError && (
               <div className="mb-3 rounded-lg border border-rose-500/70 bg-rose-950/60 p-3 text-xs font-semibold text-rose-200">
-                Supabase payment_requests error: {paymentRequestsError}
+                D1 payment_requests error: {paymentRequestsError}
               </div>
             )}
 
@@ -1865,7 +1856,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
 
             {state.users.length === 0 ? (
               <p className="text-xs text-[#b0aab8]">
-                No payment requests yet. Submissions from Pesapal or Manual WhatsApp appear here newest-first.
+                No payment requests yet. Submissions from Manual WhatsApp appear here newest-first.
               </p>
             ) : (
               <div className="space-y-2.5">
@@ -3268,7 +3259,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
         </div>
       )}
 
-      {/* TAB 5: SETTINGS (SOCIAL LINKS, ADMIN CREDENTIALS, 5 R2 LINKS, 3 PESAPAL BUTTONS, POSTER SETTINGS, MOVIES, LIVE TV) */}
+      {/* TAB 5: SETTINGS (SOCIAL LINKS, ADMIN CREDENTIALS, 5 R2 LINKS, POSTER SETTINGS, MOVIES, LIVE TV) */}
       {activeTab === 'settings' && (
         <div className="space-y-4">
           {/* 0. SOCIAL PLATFORM LINKS (WHATSAPP, YOUTUBE, FACEBOOK, TIKTOK — IMMEDIATELY VISIBLE AT TOP OF SETTINGS) */}
@@ -3613,95 +3604,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
             </div>
           </div>
 
-          {/* 3. PESAPAL (3 CREDENTIALS & 3 BUTTONS + SAVE BUTTON) */}
-          <div className="rounded-xl border border-[#d4af37]/30 bg-[#111018] p-4">
-            <h3 className="mb-3 font-display text-base font-extrabold text-[#d4af37]">
-              Pesapal Gateway Settings
-            </h3>
-            <div className="space-y-3">
-              <div>
-                <label className={labelCls}>Pesapal Consumer Key</label>
-                <input
-                  type="text"
-                  value={setPesapalKey}
-                  onChange={(e) => setSetPesapalKey(e.target.value)}
-                  placeholder="Pesapal Consumer Key"
-                  className={inputCls}
-                />
-              </div>
-              <div>
-                <label className={labelCls}>Pesapal Consumer Secret</label>
-                <input
-                  type="password"
-                  value={setPesapalSecret}
-                  onChange={(e) => setSetPesapalSecret(e.target.value)}
-                  placeholder="Pesapal Consumer Secret"
-                  className={inputCls}
-                />
-              </div>
-              <div>
-                <label className={labelCls}>Pesapal IPN / Callback URL</label>
-                <input
-                  type="url"
-                  value={setPesapalIpnUrl}
-                  onChange={(e) => setSetPesapalIpnUrl(e.target.value)}
-                  placeholder="https://vjemma.site/api/pesapal/ipn"
-                  className={inputCls}
-                />
-              </div>
-
-              <div className="flex flex-wrap gap-2 pt-1">
-                <button
-                  type="button"
-                  onClick={() => {
-                    if (!setPesapalKey.trim()) {
-                      onNotify('Enter Pesapal Consumer Key first.');
-                      return;
-                    }
-                    onNotify('Pesapal Consumer Key Verified!');
-                  }}
-                  className="min-h-[44px] rounded-lg border border-[#d4af37] bg-[#6a0dad] px-3.5 py-2 text-xs font-bold text-white"
-                >
-                  1. Test Key
-                </button>
-                <button
-                  type="button"
-                  onClick={() => {
-                    if (!setPesapalIpnUrl.trim()) {
-                      onNotify('Enter Pesapal IPN / Callback URL first.');
-                      return;
-                    }
-                    onNotify('Pesapal IPN Callback Ready!');
-                  }}
-                  className="min-h-[44px] rounded-lg border border-[#d4af37] bg-[#6a0dad] px-3.5 py-2 text-xs font-bold text-white"
-                >
-                  2. Test IPN
-                </button>
-                <button
-                  type="button"
-                  onClick={() => {
-                    if (!setPesapalKey.trim() || !setPesapalSecret.trim()) {
-                      onNotify('Enter Consumer Key and Secret to test Live connection.');
-                      return;
-                    }
-                    onNotify('Pesapal Live Connection Verified!');
-                  }}
-                  className="min-h-[44px] rounded-lg border border-[#d4af37] bg-[#6a0dad] px-3.5 py-2 text-xs font-bold text-white"
-                >
-                  3. Test Live Connection
-                </button>
-                <button
-                  type="button"
-                  onClick={savePesapalSettings}
-                  className="min-h-[44px] rounded-lg bg-gradient-to-br from-[#d4af37] to-[#b58d1e] px-4 py-2 text-xs font-extrabold text-black"
-                >
-                  Save Pesapal
-                </button>
-              </div>
-            </div>
-          </div>
-
-          {/* 4. POSTER DISPLAY CONTROLS & QUICK MOVIE POSTER MANAGER IN SETTINGS */}
+          {/* 3. POSTER DISPLAY CONTROLS & QUICK MOVIE POSTER MANAGER IN SETTINGS */}
           <div className="rounded-xl border border-[#d4af37]/30 bg-[#111018] p-4">
             <h3 className="mb-2 font-display text-base font-extrabold text-[#d4af37]">
               Poster Display & Movie Card Settings

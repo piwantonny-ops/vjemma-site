@@ -149,9 +149,6 @@ export interface AppSettings {
   appName: string;
   r2Endpoint: string;
   r2Links: string[];
-  pesapalKey: string;
-  pesapalSecret: string;
-  pesapalIpnUrl: string;
   whatsappKey: string;
   socialLinks: string;
   whatsappUrl: string;
@@ -175,13 +172,16 @@ export interface AppSettings {
 
 export interface PaymentRequestRecord {
   id: string;
+  client_name?: string | null;
   name?: string | null;
-  phone: string;
-  email: string;
+  client_phone?: string;
+  phone?: string;
+  email?: string;
   plan: string;
   amount: number;
-  days: number;
-  payment_method: string;
+  days?: number;
+  method?: string;
+  payment_method?: string;
   status: AccountStatus;
   expiry?: number | null;
   created_at: string;

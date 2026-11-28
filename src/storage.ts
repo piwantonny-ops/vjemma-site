@@ -250,16 +250,13 @@ export function createDefaultState(): AppState {
     likes: {},
     comments: {},
     adminEmail: LOCKED_ADMIN_EMAIL,
-    adminPassword: 'VJEMMA123',
+    adminPassword: '',
     currentUser: null,
     isAdminLoggedIn: false,
     settings: {
       appName: 'VJ EMMA - TRUE LIGHT PRODUCTION',
       r2Endpoint: '',
       r2Links: ['', '', '', '', ''],
-      pesapalKey: '',
-      pesapalSecret: '',
-      pesapalIpnUrl: '',
       whatsappKey: '',
       socialLinks: '',
       whatsappUrl: 'https://wa.me/256776043203',
@@ -295,17 +292,14 @@ export function loadState(): AppState {
     const raw = localStorage.getItem(SESSION_KEY);
     if (!raw) return defaults;
     const parsed = JSON.parse(raw) as Partial<AppState>;
-    const migratedPassword =
-      !parsed.adminPassword || parsed.adminPassword === 'admin123' || parsed.adminPassword === 'vjemma123'
-        ? defaults.adminPassword
-        : parsed.adminPassword;
+    const restoredUser =
+      parsed.currentUser && parsed.currentUser.role !== 'admin' ? parsed.currentUser : null;
 
     return {
       ...defaults,
       adminEmail: LOCKED_ADMIN_EMAIL,
-      adminPassword: migratedPassword,
-      currentUser: parsed.currentUser || null,
-      isAdminLoggedIn: Boolean(parsed.isAdminLoggedIn),
+      currentUser: restoredUser,
+      isAdminLoggedIn: false,
     };
   } catch {
     return defaults;
@@ -314,12 +308,9 @@ export function loadState(): AppState {
 
 export function saveState(state: AppState): void {
   try {
-    // Only persist auth session in browser; Clients, Payment Requests, Movies, Series, Settings live in Cloud DB / Supabase
+    // Only persist non-privileged customer session in browser; Admin auth lives in memory and all data lives in Cloudflare D1 (vjemmadb)
     const sessionPayload = {
-      adminEmail: LOCKED_ADMIN_EMAIL,
-      adminPassword: state.adminPassword,
-      currentUser: state.currentUser,
-      isAdminLoggedIn: state.isAdminLoggedIn,
+      currentUser: state.currentUser && state.currentUser.role !== 'admin' ? state.currentUser : null,
     };
     localStorage.setItem(SESSION_KEY, JSON.stringify(sessionPayload));
     if (typeof window !== 'undefined' && 'BroadcastChannel' in window) {
